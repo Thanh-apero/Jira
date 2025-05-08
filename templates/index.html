@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jira Discord Notifier</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 1000px;
+        }
+        .card {
+            margin-bottom: 1.5rem;
+            box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+        }
+        .project-card {
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+        .project-card:hover {
+            transform: translateY(-5px);
+        }
+        .watched-badge {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+        }
+        .title-icon {
+            margin-right: 10px;
+        }
+        .flash-message {
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1 class="mb-4 text-center">
+        <span class="title-icon">🔄</span>Jira Discord Notifier
+    </h1>
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category if category != 'error' else 'danger' }} alert-dismissible fade show flash-message"
+         role="alert">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    <!-- Settings Card -->
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">⚙️ Settings</h5>
+        </div>
+        <div class="card-body">
+            <form action="{{ url_for('update_settings') }}" method="post">
+                <div class="mb-3">
+                    <label for="discord_webhook_url" class="form-label">Discord Webhook URL</label>
+                    <input type="text" class="form-control" id="discord_webhook_url" name="discord_webhook_url"
+                           value="{{ discord_url }}">
+                </div>
+                <div class="mb-3">
+                    <label for="check_interval" class="form-label">Check Interval (minutes)</label>
+                    <input type="number" class="form-control" id="check_interval" name="check_interval"
+                           value="{{ check_interval }}" min="1" max="1440">
+                </div>
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Projects Card -->
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">📋 Jira Projects</h5>
+            <div>
+                <form action="{{ url_for('run_manual_checks') }}" method="post" class="d-inline">
+                    <button type="submit" class="btn btn-sm btn-outline-primary">Run Checks Now</button>
+                </form>
+            </div>
+        </div>
+        <div class="card-body">
+            <p>Select the projects you want to monitor:</p>
+            {% if projects %}
+            <div class="row">
+                {% for project in projects %}
+                <div class="col-md-4">
+                    <div class="card project-card mb-3 {% if project.watched %}border-primary{% endif %}"
+                         onclick="toggleProject('{{ project.key }}')">
+                        <div class="card-body">
+                            <h6 class="card-title">{{ project.name }}</h6>
+                            <small class="text-muted">{{ project.key }}</small>
+                            {% if project.watched %}
+                            <span class="badge bg-primary watched-badge">Watching</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="alert alert-warning">
+                No projects found. Please check your Jira API credentials.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Notification Examples -->
+    <div class="card mt-4">
+        <div class="card-header">
+            <h5 class="mb-0">🔔 Notification Types</h5>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="card mb-3 bg-light">
+                        <div class="card-body">
+                            <h6 class="card-title">🆕 New Issue</h6>
+                            <p class="card-text small">Notifies when a new issue is created.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card mb-3 bg-light">
+                        <div class="card-body">
+                            <h6 class="card-title">🔄 Status Update</h6>
+                            <p class="card-text small">Notifies when issue status changes.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card mb-3 bg-light">
+                        <div class="card-body">
+                            <h6 class="card-title">💬 New Comment</h6>
+                            <p class="card-text small">Notifies when a new comment is added.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card mb-3 bg-light">
+                        <div class="card-body">
+                            <h6 class="card-title">⚠️ Overdue Issue</h6>
+                            <p class="card-text small">Notifies about issues past their due date.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card mb-3 bg-light">
+                        <div class="card-body">
+                            <h6 class="card-title">⏰ Upcoming Deadline</h6>
+                            <p class="card-text small">Notifies about issues with approaching deadlines.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card mb-3 bg-light">
+                        <div class="card-body">
+                            <h6 class="card-title">🔴 High Priority</h6>
+                            <p class="card-text small">Notifies about high priority issues.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer class="mt-4 text-center text-muted">
+        <p>Jira Discord Notifier &copy; 2025</p>
+    </footer>
+</div>
+
+<!-- JavaScript -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+
+    function toggleProject(projectKey) {
+        fetch(`/projects/toggle/${projectKey}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                window.location.reload();
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Failed to update project status');
+        });
+
+}
+</script>
+</body>
+</html>
