@@ -10,10 +10,27 @@ class DiscordNotifier:
     def __init__(self, webhook_url=None):
         """Initialize Discord notifier with webhook URL"""
         self.default_webhook_url = webhook_url or os.getenv('DISCORD_WEBHOOK_URL')
+        # Map of Jira user display names to Discord user IDs
+        self.user_mapping = {
+            "Hải Khổng Minh": "1077202167129190460",  # kevin_ocean_
+            "tramtn": "896304437851725824",  # ngoctram4978
+            "Phạm Xuân Hiếu": "873555727057317978"  # hieupx27052003
+        }
 
     def is_configured(self):
         """Check if Discord webhook URL is configured"""
         return bool(self.default_webhook_url)
+
+    def get_discord_mention(self, jira_user):
+        """Convert a Jira username to a Discord mention if available"""
+        if not jira_user:
+            return ""
+
+        discord_id = self.user_mapping.get(jira_user)
+        if discord_id:
+            # Format for Discord mention is <@USER_ID> with the numeric ID
+            return f"<@{discord_id}>"
+        return ""
 
     def send_notification(self, title, description, color=16711680, fields=None, webhook_url=None):
         """
@@ -75,18 +92,28 @@ class DiscordNotifier:
         project_key = issue.get('fields', {}).get('project', {}).get('key')
         project_name = issue.get('fields', {}).get('project', {}).get('name')
 
+        # Get assignee info
+        assignee_obj = issue.get('fields', {}).get('assignee')
+        assignee = assignee_obj.get('displayName', 'Unassigned') if assignee_obj else 'Unassigned'
+
+        # Add mention if applicable
+        mention = self.get_discord_mention(assignee)
+
         # Check for high priority issues
         if priority and priority.lower() in ['highest', 'high']:
             fields = [
                 {"name": "Issue Type", "value": issue_type, "inline": True},
                 {"name": "Priority", "value": priority, "inline": True},
                 {"name": "Created By", "value": creator, "inline": True},
+                {"name": "Assignee", "value": assignee, "inline": True},
                 {"name": "Project", "value": project_name, "inline": True},
                 {"name": "Link", "value": f"{os.getenv('JIRA_URL')}/browse/{issue_key}", "inline": False}
             ]
 
             title = f"🔴 High Priority Issue: {issue_key}"
             description = f"**{summary}**"
+            if mention:
+                description += f"\n\n{mention} please check this high priority issue!"
 
             # Send notification to Discord (Red color)
             return self.send_notification(title, description, 15158332, fields, webhook_url)
@@ -94,12 +121,15 @@ class DiscordNotifier:
             fields = [
                 {"name": "Issue Type", "value": issue_type, "inline": True},
                 {"name": "Created By", "value": creator, "inline": True},
+                {"name": "Assignee", "value": assignee, "inline": True},
                 {"name": "Project", "value": project_name, "inline": True},
                 {"name": "Link", "value": f"{os.getenv('JIRA_URL')}/browse/{issue_key}", "inline": False}
             ]
 
             title = f"🆕 New Issue Created: {issue_key}"
             description = f"**{summary}**"
+            if mention:
+                description += f"\n\n{mention} this task has been assigned to you."
 
             # Send notification to Discord (Blue color)
             return self.send_notification(title, description, 3447003, fields, webhook_url)
@@ -113,16 +143,26 @@ class DiscordNotifier:
         summary = issue.get('fields', {}).get('summary')
         project_name = issue.get('fields', {}).get('project', {}).get('name', 'Unknown')
 
+        # Get assignee info
+        assignee_obj = issue.get('fields', {}).get('assignee')
+        assignee = assignee_obj.get('displayName', 'Unassigned') if assignee_obj else 'Unassigned'
+
+        # Add mention if applicable
+        mention = self.get_discord_mention(assignee)
+
         fields = [
             {"name": "From Status", "value": from_status, "inline": True},
             {"name": "To Status", "value": to_status, "inline": True},
             {"name": "Updated By", "value": updated_by, "inline": True},
+            {"name": "Assignee", "value": assignee, "inline": True},
             {"name": "Project", "value": project_name, "inline": True},
             {"name": "Link", "value": f"{os.getenv('JIRA_URL')}/browse/{issue_key}", "inline": False}
         ]
 
         title = f"🔄 Issue Status Updated: {issue_key}"
         description = f"**{summary}**"
+        if mention:
+            description += f"\n\n{mention} status has been changed to {to_status}."
 
         # Send notification to Discord (Yellow color)
         return self.send_notification(title, description, 15105570, fields, webhook_url)
@@ -136,6 +176,13 @@ class DiscordNotifier:
         issue_summary = issue.get('fields', {}).get('summary')
         project_name = issue.get('fields', {}).get('project', {}).get('name', 'Unknown')
 
+        # Get assignee info
+        assignee_obj = issue.get('fields', {}).get('assignee')
+        assignee = assignee_obj.get('displayName', 'Unassigned') if assignee_obj else 'Unassigned'
+
+        # Add mention if applicable
+        mention = self.get_discord_mention(assignee)
+
         # Limit comment length for display
         if len(comment_body) > 200:
             comment_body = comment_body[:197] + "..."
@@ -143,6 +190,7 @@ class DiscordNotifier:
         fields = [
             {"name": "Issue", "value": issue_key, "inline": True},
             {"name": "Commenter", "value": comment_author, "inline": True},
+            {"name": "Assignee", "value": assignee, "inline": True},
             {"name": "Project", "value": project_name, "inline": True},
             {"name": "Content", "value": comment_body, "inline": False},
             {"name": "Link", "value": f"{os.getenv('JIRA_URL')}/browse/{issue_key}?focusedCommentId={comment_id}",
@@ -151,68 +199,11 @@ class DiscordNotifier:
 
         title = f"💬 New Comment on Issue: {issue_key}"
         description = f"**{issue_summary}**"
+        if mention:
+            description += f"\n\n{mention} a new comment was added to this issue."
 
         # Send notification to Discord (Teal color)
         return self.send_notification(title, description, 3066993, fields, webhook_url)
-
-    def send_overdue_notification(self, issue, webhook_url=None):
-        """Send notification about overdue issue"""
-        if not issue:
-            return False
-
-        issue_key = issue.get('key')
-        summary = issue.get('fields', {}).get('summary')
-        due_date = issue.get('fields', {}).get('duedate', 'Unspecified')
-        project_name = issue.get('fields', {}).get('project', {}).get('name', 'Unknown')
-
-        # Handle when assignee is None
-        assignee_obj = issue.get('fields', {}).get('assignee')
-        assignee = assignee_obj.get('displayName', 'Unknown') if assignee_obj else 'Unassigned'
-
-        fields = [
-            {"name": "Due Date", "value": due_date, "inline": True},
-            {"name": "Assignee", "value": assignee, "inline": True},
-            {"name": "Project", "value": project_name, "inline": True},
-            {"name": "Link", "value": f"{os.getenv('JIRA_URL')}/browse/{issue_key}", "inline": False}
-        ]
-
-        title = f"⚠️ OVERDUE ISSUE: {issue_key}"
-        description = f"**{summary}**"
-
-        # Send notification to Discord (Red color)
-        return self.send_notification(title, description, 16711680, fields, webhook_url)
-
-    def send_upcoming_deadline_notification(self, issue, webhook_url=None):
-        """Send notification about upcoming deadline"""
-        if not issue:
-            return False
-
-        issue_key = issue.get('key')
-        summary = issue.get('fields', {}).get('summary')
-        due_date = issue.get('fields', {}).get('duedate', 'Unspecified')
-        project_name = issue.get('fields', {}).get('project', {}).get('name', 'Unknown')
-
-        # Handle when assignee is None
-        assignee_obj = issue.get('fields', {}).get('assignee')
-        assignee = assignee_obj.get('displayName', 'Unknown') if assignee_obj else 'Unassigned'
-
-        # Handle when priority is None
-        priority_obj = issue.get('fields', {}).get('priority')
-        priority = priority_obj.get('name', 'Unknown') if priority_obj else 'Unspecified'
-
-        fields = [
-            {"name": "Assignee", "value": assignee, "inline": True},
-            {"name": "Deadline", "value": due_date, "inline": True},
-            {"name": "Priority", "value": priority, "inline": True},
-            {"name": "Project", "value": project_name, "inline": True},
-            {"name": "Link", "value": f"{os.getenv('JIRA_URL')}/browse/{issue_key}", "inline": False}
-        ]
-
-        title = f"⏰ Upcoming Deadline: {issue_key}"
-        description = f"**{summary}**"
-
-        # Send notification to Discord (Orange color)
-        return self.send_notification(title, description, 15105570, fields, webhook_url)
 
     def send_bug_reopened_notification(self, bug, webhook_url=None):
         """Send notification about a bug that has been reopened"""
@@ -226,6 +217,9 @@ class DiscordNotifier:
         # Handle when assignee is None
         assignee_obj = bug.get('fields', {}).get('assignee')
         assignee = assignee_obj.get('displayName', 'Unknown') if assignee_obj else 'Unassigned'
+
+        # Add mention if applicable
+        mention = self.get_discord_mention(assignee)
 
         # Handle when priority is None
         priority_obj = bug.get('fields', {}).get('priority')
@@ -260,6 +254,77 @@ class DiscordNotifier:
 
         title = f"🐛 REOPENED BUG: {issue_key}"
         description = f"**{summary}**\n\n⚠️ This bug has been reopened by {reopened_by}{reopen_time_str} and needs attention!"
+        if mention:
+            description += f"\n\n{mention} this bug has been reopened and needs your attention!"
 
         # Send notification to Discord (Red color with bug emoji)
         return self.send_notification(title, description, 15548997, fields, webhook_url)
+
+    def send_overdue_notification(self, issue, webhook_url=None):
+        """Send notification about overdue issue"""
+        if not issue:
+            return False
+
+        issue_key = issue.get('key')
+        summary = issue.get('fields', {}).get('summary')
+        due_date = issue.get('fields', {}).get('duedate', 'Unspecified')
+        project_name = issue.get('fields', {}).get('project', {}).get('name', 'Unknown')
+
+        # Handle when assignee is None
+        assignee_obj = issue.get('fields', {}).get('assignee')
+        assignee = assignee_obj.get('displayName', 'Unknown') if assignee_obj else 'Unassigned'
+
+        # Add mention if applicable
+        mention = self.get_discord_mention(assignee)
+
+        fields = [
+            {"name": "Due Date", "value": due_date, "inline": True},
+            {"name": "Assignee", "value": assignee, "inline": True},
+            {"name": "Project", "value": project_name, "inline": True},
+            {"name": "Link", "value": f"{os.getenv('JIRA_URL')}/browse/{issue_key}", "inline": False}
+        ]
+
+        title = f"⚠️ OVERDUE ISSUE: {issue_key}"
+        description = f"**{summary}**"
+        if mention:
+            description += f"\n\n{mention} this issue is overdue and requires urgent attention!"
+
+        # Send notification to Discord (Red color)
+        return self.send_notification(title, description, 16711680, fields, webhook_url)
+
+    def send_upcoming_deadline_notification(self, issue, webhook_url=None):
+        """Send notification about upcoming deadline"""
+        if not issue:
+            return False
+
+        issue_key = issue.get('key')
+        summary = issue.get('fields', {}).get('summary')
+        due_date = issue.get('fields', {}).get('duedate', 'Unspecified')
+        project_name = issue.get('fields', {}).get('project', {}).get('name', 'Unknown')
+
+        # Handle when assignee is None
+        assignee_obj = issue.get('fields', {}).get('assignee')
+        assignee = assignee_obj.get('displayName', 'Unknown') if assignee_obj else 'Unassigned'
+
+        # Add mention if applicable
+        mention = self.get_discord_mention(assignee)
+
+        # Handle when priority is None
+        priority_obj = issue.get('fields', {}).get('priority')
+        priority = priority_obj.get('name', 'Unknown') if priority_obj else 'Unspecified'
+
+        fields = [
+            {"name": "Assignee", "value": assignee, "inline": True},
+            {"name": "Deadline", "value": due_date, "inline": True},
+            {"name": "Priority", "value": priority, "inline": True},
+            {"name": "Project", "value": project_name, "inline": True},
+            {"name": "Link", "value": f"{os.getenv('JIRA_URL')}/browse/{issue_key}", "inline": False}
+        ]
+
+        title = f"⏰ Upcoming Deadline: {issue_key}"
+        description = f"**{summary}**"
+        if mention:
+            description += f"\n\n{mention} this issue has an upcoming deadline!"
+
+        # Send notification to Discord (Orange color)
+        return self.send_notification(title, description, 15105570, fields, webhook_url)

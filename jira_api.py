@@ -933,7 +933,7 @@ class JiraAPI:
 
         all_issues = self.search_issues(
             jql,
-            fields="key,summary,status,updated,project",
+            fields="key,summary,status,assignee,updated,project",
             expand="changelog",
             use_cache=False
         )
@@ -947,16 +947,48 @@ class JiraAPI:
 
             for history in histories:
                 history_id = history.get('id')
+                history_created = history.get('created')
+                change_key = f"{issue_key}-{history_id}"
+
                 # Skip if already notified about this change
-                if self.was_issue_notified('status_changes', f"{issue_key}-{history_id}"):
+                if self.was_issue_notified('status_changes', change_key):
                     continue
+
+                # Only process changes that are within the time window
+                if history_created:
+                    try:
+                        change_time = datetime.fromisoformat(history_created.replace('Z', '+00:00'))
+                        now = datetime.now(change_time.tzinfo)
+                        if (now - change_time).total_seconds() / 3600 > hours:
+                            continue
+                    except:
+                        pass  # If we can't parse the time, still process the change
 
                 for item in history.get('items', []):
                     if item.get('field') == 'status':
                         # Only include if changing to Todo or In Progress
                         to_status = item.get('toString', '').lower()
                         if to_status in ['to do', 'todo', 'in progress']:
-                            issues_with_changes.append(issue)
+                            # Make sure we have the latest assignee information
+                            if not issue.get('fields', {}).get('assignee'):
+                                # If assignee info is missing, try to get it from the full issue details
+                                detailed_issue = self.get_issue_details(issue_key)
+                                if detailed_issue and detailed_issue.get('fields', {}).get('assignee'):
+                                    issue['fields']['assignee'] = detailed_issue['fields']['assignee']
+
+                            # Add the history to the issue object for processing
+                            if 'status_changes' not in issue:
+                                issue['status_changes'] = []
+                            issue['status_changes'].append({
+                                'history_id': history_id,
+                                'from_status': item.get('fromString'),
+                                'to_status': item.get('toString'),
+                                'updated_by': history.get('author', {}).get('displayName')
+                            })
+
+                            # Only add the issue once if it has valid status changes
+                            if issue not in issues_with_changes:
+                                issues_with_changes.append(issue)
                             break
 
         return issues_with_changes

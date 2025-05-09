@@ -169,37 +169,33 @@ def check_status_changes():
             logger.debug(f"Skipping status notification for bug {issue_key} as bugs are handled separately")
             continue
 
-        changelog = issue.get('changelog', {})
-        if not changelog:
+        # Process status changes that were added to the issue
+        status_changes = issue.get('status_changes', [])
+
+        if not status_changes:
+            logger.debug(f"No status changes to process for issue {issue_key}")
             continue
 
-        histories = changelog.get('histories', [])
-
-        for history in histories:
-            history_id = history.get('id')
+        for change in status_changes:
+            history_id = change.get('history_id')
             change_key = f"{issue_key}-{history_id}"
+            from_status = change.get('from_status')
+            to_status = change.get('to_status')
+            updated_by = change.get('updated_by')
 
-            history_items = history.get('items', [])
+            # Get project-specific webhook URL if available
+            webhook_url = project_manager.get_project_webhook(project_key, discord_notifier.default_webhook_url)
 
-            for item in history_items:
-                if item.get('field') == 'status':
-                    from_status = item.get('fromString')
-                    to_status = item.get('toString')
-                    updated_by = history.get('author', {}).get('displayName')
+            # Send notification
+            result = discord_notifier.send_status_change_notification(
+                issue, from_status, to_status, updated_by, webhook_url
+            )
 
-                    # Get project-specific webhook URL if available
-                    webhook_url = project_manager.get_project_webhook(project_key, discord_notifier.default_webhook_url)
-
-                    # Send notification
-                    result = discord_notifier.send_status_change_notification(
-                        issue, from_status, to_status, updated_by, webhook_url
-                    )
-
-                    # Mark as processed if notification was sent
-                    if result:
-                        jira_api.mark_issue_notified('status_changes', change_key,
-                                                     f"status change: {from_status} to {to_status}")
-                        notifications_sent += 1
+            # Mark as processed if notification was sent
+            if result:
+                jira_api.mark_issue_notified('status_changes', change_key,
+                                             f"status change: {from_status} to {to_status}")
+                notifications_sent += 1
 
     logger.info(f"Sent {notifications_sent} status change notifications (excluding bugs)")
 
