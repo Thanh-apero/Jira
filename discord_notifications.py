@@ -14,7 +14,8 @@ class DiscordNotifier:
         self.user_mapping = {
             "Hải Khổng Minh": "1077202167129190460",  # kevin_ocean_
             "tramtn": "896304437851725824",  # ngoctram4978
-            "Phạm Xuân Hiếu": "873555727057317978"  # hieupx27052003
+            "Phạm Xuân Hiếu": "873555727057317978",  # hieupx27052003,
+            "Võ Hữu Tuấn": "758925480472346625"
         }
 
     def is_configured(self):
