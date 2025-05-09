@@ -31,6 +31,25 @@ logger = logging.getLogger(__name__)
 # Check interval (minutes)
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '30'))
 
+# Default global notification types
+DEFAULT_GLOBAL_NOTIFICATION_SETTINGS = {
+    "notify_reopened_bugs": True,
+    "notify_new_issues": True,
+    "notify_status_changes": True,
+    "notify_comments": True,
+    "notify_overdue_issues": True,
+    "notify_upcoming_deadlines": True,
+}
+
+# Load global notification settings from environment variables, using defaults if not set
+global_notification_settings = DEFAULT_GLOBAL_NOTIFICATION_SETTINGS.copy()
+for key, default_value in DEFAULT_GLOBAL_NOTIFICATION_SETTINGS.items():
+    env_value = os.getenv(key.upper())
+    if env_value is not None:
+        global_notification_settings[key] = env_value.lower() == 'true'
+    else:
+        global_notification_settings[key] = default_value
+
 # Initialize our components
 jira_api = JiraAPI()
 discord_notifier = DiscordNotifier()
@@ -52,6 +71,10 @@ def check_reopened_bugs():
     """
     Check for bugs that have been reopened and notify
     """
+    if not global_notification_settings.get("notify_reopened_bugs"):
+        logger.info("Skipping reopened bug check as it's globally disabled.")
+        return
+
     if not jira_api.is_configured():
         logger.error("Jira API credentials not configured")
         return
@@ -66,9 +89,9 @@ def check_reopened_bugs():
 
     for bug in reopened_bugs:
         issue_key = bug.get('key')
+        project_key = bug.get('fields', {}).get('project', {}).get('key')
 
         # Get project-specific webhook URL if available
-        project_key = bug.get('fields', {}).get('project', {}).get('key')
         webhook_url = project_manager.get_project_webhook(project_key, discord_notifier.default_webhook_url)
 
         # Send notification
@@ -83,6 +106,10 @@ def check_new_issues():
     """
     Check for new issues created and notify
     """
+    if not global_notification_settings.get("notify_new_issues"):
+        logger.info("Skipping new issue check as it's globally disabled.")
+        return
+
     if not jira_api.is_configured():
         logger.error("Jira API credentials not configured")
         return
@@ -97,9 +124,9 @@ def check_new_issues():
 
     for issue in issues:
         issue_key = issue.get('key')
+        project_key = issue.get('fields', {}).get('project', {}).get('key')
 
         # Get project-specific webhook URL if available
-        project_key = issue.get('fields', {}).get('project', {}).get('key')
         webhook_url = project_manager.get_project_webhook(project_key, discord_notifier.default_webhook_url)
 
         # Send notification
@@ -115,6 +142,10 @@ def check_status_changes():
     Check for status changes and notify
     Exclude bugs from notifications as they are handled by check_reopened_bugs
     """
+    if not global_notification_settings.get("notify_status_changes"):
+        logger.info("Skipping status change check as it's globally disabled.")
+        return
+
     if not jira_api.is_configured():
         logger.error("Jira API credentials not configured")
         return
@@ -130,6 +161,7 @@ def check_status_changes():
     notifications_sent = 0
     for issue in issues:
         issue_key = issue.get('key')
+        project_key = issue.get('fields', {}).get('project', {}).get('key')
 
         # Skip bugs - they are handled by check_reopened_bugs
         issue_type = issue.get('fields', {}).get('issuetype', {}).get('name', '').lower()
@@ -147,7 +179,6 @@ def check_status_changes():
             history_id = history.get('id')
             change_key = f"{issue_key}-{history_id}"
 
-            # History items already filtered in jira_api.find_status_changes
             history_items = history.get('items', [])
 
             for item in history_items:
@@ -157,7 +188,6 @@ def check_status_changes():
                     updated_by = history.get('author', {}).get('displayName')
 
                     # Get project-specific webhook URL if available
-                    project_key = issue.get('fields', {}).get('project', {}).get('key')
                     webhook_url = project_manager.get_project_webhook(project_key, discord_notifier.default_webhook_url)
 
                     # Send notification
@@ -178,6 +208,10 @@ def check_new_comments():
     """
     Check for new comments and notify
     """
+    if not global_notification_settings.get("notify_comments"):
+        logger.info("Skipping new comment check as it's globally disabled.")
+        return
+
     if not jira_api.is_configured():
         logger.error("Jira API credentials not configured")
         return
@@ -193,10 +227,7 @@ def check_new_comments():
     for issue in issues:
         issue_key = issue.get('key')
         new_comments = issue.get('new_comments', [])
-
-        # Skip if no new comments
-        if not new_comments:
-            continue
+        project_key = issue.get('fields', {}).get('project', {}).get('key')
 
         for comment in new_comments:
             comment_id = comment.get('id')
@@ -206,7 +237,6 @@ def check_new_comments():
             comment_author = comment.get('author', {}).get('displayName', 'Unknown')
 
             # Get project-specific webhook URL if available
-            project_key = issue.get('fields', {}).get('project', {}).get('key')
             webhook_url = project_manager.get_project_webhook(project_key, discord_notifier.default_webhook_url)
 
             # Send notification
@@ -223,6 +253,10 @@ def check_overdue_issues():
     """
     Check for issues that have passed their due date
     """
+    if not global_notification_settings.get("notify_overdue_issues"):
+        logger.info("Skipping overdue issue check as it's globally disabled.")
+        return
+
     if not jira_api.is_configured():
         logger.error("Jira API credentials not configured")
         return
@@ -237,9 +271,9 @@ def check_overdue_issues():
 
     for issue in issues:
         issue_key = issue.get('key')
+        project_key = issue.get('fields', {}).get('project', {}).get('key')
 
         # Get project-specific webhook URL if available
-        project_key = issue.get('fields', {}).get('project', {}).get('key')
         webhook_url = project_manager.get_project_webhook(project_key, discord_notifier.default_webhook_url)
 
         # Send notification
@@ -250,10 +284,14 @@ def check_overdue_issues():
             jira_api.mark_issue_notified('issues', issue_key, "overdue")
 
 
-def check_upcoming_deadlines(days=3):
+def check_upcoming_deadlines(days=1):
     """
     Check and notify about tasks with approaching deadlines
     """
+    if not global_notification_settings.get("notify_upcoming_deadlines"):
+        logger.info("Skipping upcoming deadline check as it's globally disabled.")
+        return
+
     if not jira_api.is_configured():
         logger.error("Jira API credentials not configured")
         return
@@ -268,9 +306,9 @@ def check_upcoming_deadlines(days=3):
 
     for issue in issues:
         issue_key = issue.get('key')
+        project_key = issue.get('fields', {}).get('project', {}).get('key')
 
         # Get project-specific webhook URL if available
-        project_key = issue.get('fields', {}).get('project', {}).get('key')
         webhook_url = project_manager.get_project_webhook(project_key, discord_notifier.default_webhook_url)
 
         # Send notification
@@ -337,7 +375,9 @@ def index():
                            project_categories=project_categories,
                            jira_url=jira_url,
                            discord_url=discord_url,
-                           check_interval=CHECK_INTERVAL)
+                           check_interval=CHECK_INTERVAL,
+                           global_notification_settings=global_notification_settings)
+
 
 @app.route('/projects/toggle/<project_key>', methods=['POST'])
 def toggle_project(project_key):
@@ -371,26 +411,32 @@ def update_project_webhook():
 
     return jsonify({"status": "success", "project": project_key})
 
+
 @app.route('/settings/update', methods=['POST'])
 def update_settings():
     """
     Update application settings
     """
-    global CHECK_INTERVAL
+    global CHECK_INTERVAL, global_notification_settings
 
     discord_url = request.form.get('discord_webhook_url', '').strip()
     check_interval = request.form.get('check_interval', '30')
 
+    # Update global notification settings from form
+    new_global_notification_settings = {}
+    for key in DEFAULT_GLOBAL_NOTIFICATION_SETTINGS.keys():
+        form_value = request.form.get(key)
+        new_global_notification_settings[key] = form_value == 'on'
+
     try:
         check_interval = int(check_interval)
-        if check_interval < 1 or check_interval > 1440:  # Max 1 day in minutes
+        if check_interval < 1 or check_interval > 1440:
             flash('Check interval must be between 1 and 1440 minutes', 'error')
             return redirect(url_for('index'))
     except ValueError:
         flash('Check interval must be a number', 'error')
         return redirect(url_for('index'))
 
-    # Update environment variables
     with open('.env', 'r') as f:
         env_lines = f.readlines()
 
@@ -401,13 +447,21 @@ def update_settings():
             elif line.strip().startswith('CHECK_INTERVAL='):
                 f.write(f'CHECK_INTERVAL={check_interval}\n')
             else:
-                f.write(line)
+                is_notification_setting_line = False
+                for notify_key in DEFAULT_GLOBAL_NOTIFICATION_SETTINGS.keys():
+                    if line.strip().startswith(notify_key.upper() + '='):
+                        is_notification_setting_line = True
+                        break
+                if not is_notification_setting_line:
+                    f.write(line)
 
-    # Update in-memory values
+        for key, value in new_global_notification_settings.items():
+            f.write(f"{key.upper()}={value}\n")
+
     discord_notifier.default_webhook_url = discord_url
     CHECK_INTERVAL = check_interval
+    global_notification_settings = new_global_notification_settings
 
-    # Reschedule jobs with new interval
     for job in scheduler.get_jobs():
         if job.id in ['scheduled_new_issue_check', 'scheduled_status_change_check', 'scheduled_comment_check',
                       'scheduled_bug_check']:
@@ -444,6 +498,175 @@ def run_manual_checks():
     flash(f'Manual check ({check_type}) completed', 'success')
     return redirect(url_for('index'))
 
+
+@app.route('/projects/create-tasks', methods=['POST'])
+def create_jira_tasks():
+    data = request.json
+    project_key = data.get('project_key')
+    tasks_data = data.get('tasks')
+
+    if not project_key or not tasks_data:
+        return jsonify({"status": "error", "message": "Missing project key or task data"}), 400
+
+    if not jira_api.is_configured():
+        logger.error("Jira API credentials not configured. Cannot create tasks.")
+        return jsonify({"status": "error", "message": "Jira API not configured on the server."}), 500
+
+    results = []
+    all_successful = True
+
+    for task_detail in tasks_data:
+        epic_key_to_link = None
+        epic_name_from_task = task_detail.get("epic")
+
+        if epic_name_from_task:
+            logger.info(f"Processing Epic '{epic_name_from_task}' for task '{task_detail.get('summary')}'.")
+            try:
+                # Assumption 1: jira_api has a method to find an epic by its name.
+                # This method should return an object with a 'key' or None.
+                found_epic = jira_api.find_epic_by_name(project_key, epic_name_from_task)
+
+                if found_epic and found_epic.get("key"):
+                    epic_key_to_link = found_epic.get("key")
+                    logger.info(f"Found existing Epic '{epic_name_from_task}' with key {epic_key_to_link}.")
+                else:
+                    logger.info(
+                        f"Epic '{epic_name_from_task}' not found in project {project_key}. Attempting to create it.")
+                    # Assumption 2: jira_api.create_issue can create an Epic.
+                    # The payload expects 'summary' for the Epic's name and 'issuetype' as 'Epic'.
+                    # The jira_api module is responsible for mapping this to correct Jira fields for Epic creation (e.g. 'Epic Name' custom field).
+                    new_epic_payload = {
+                        "summary": epic_name_from_task,
+                        "issuetype": "Epic"
+                    }
+                    created_epic_response = jira_api.create_issue(project_key, new_epic_payload)
+
+                    if created_epic_response and not created_epic_response.get("error") and created_epic_response.get(
+                            "key"):
+                        epic_key_to_link = created_epic_response.get("key")
+                        logger.info(
+                            f"Successfully created new Epic '{epic_name_from_task}' with key {epic_key_to_link}.")
+                    else:
+                        all_successful = False
+                        error_message_epic = "Failed to create Epic"
+                        if created_epic_response and created_epic_response.get("message"):
+                            if isinstance(created_epic_response.get("message"), dict) and created_epic_response.get(
+                                    "message").get('errorMessages'):
+                                error_message_epic = ", ".join(
+                                    created_epic_response.get("message").get('errorMessages'))
+                            elif isinstance(created_epic_response.get("message"), str):
+                                error_message_epic = created_epic_response.get("message")
+                        results.append({
+                            "status": "error_creating_epic",
+                            "epic_name_attempted": epic_name_from_task,
+                            "task_summary_related": task_detail.get("summary"),
+                            "message": error_message_epic,
+                            "details": created_epic_response
+                        })
+                        logger.error(
+                            f"Failed to create Epic '{epic_name_from_task}' for task '{task_detail.get('summary')}': {error_message_epic}")
+            except AttributeError:
+                logger.error(
+                    "`jira_api.find_epic_by_name` method not found. Please implement it to find epics by name.")
+                all_successful = False
+                results.append({
+                    "status": "error_finding_epic",
+                    "epic_name_attempted": epic_name_from_task,
+                    "task_summary_related": task_detail.get("summary"),
+                    "message": "Server misconfiguration: Epic search functionality not available."
+                })
+            except Exception as e:
+                logger.error(
+                    f"An unexpected error occurred during Epic processing for '{epic_name_from_task}': {str(e)}")
+                all_successful = False
+                results.append({
+                    "status": "error_processing_epic",
+                    "epic_name_attempted": epic_name_from_task,
+                    "task_summary_related": task_detail.get("summary"),
+                    "message": f"Unexpected error processing epic: {str(e)}"
+                })
+
+        # Prepare issue_payload for the task, only including specified fields
+        issue_payload = {
+            "summary": task_detail.get("summary"),
+            "issuetype": task_detail.get("issuetype", "Task"),  # Default to Task, or get from UI
+        }
+
+        if epic_key_to_link:
+            # Assumption 3: "epic_link_value" is the correct key your jira_api expects for linking,
+            # and it expects the Epic's issue KEY.
+            issue_payload["epic_link_value"] = epic_key_to_link
+
+        if task_detail.get("priority"):
+            issue_payload["priority"] = task_detail.get("priority")
+
+        # Map estimate_time to original_estimate for Jira
+        if task_detail.get("estimate_time"):
+            issue_payload["original_estimate"] = task_detail.get("estimate_time")
+
+        if task_detail.get("due_date"):
+            issue_payload["duedate"] = task_detail.get("due_date")
+
+        # Thêm start_date nếu có
+        if task_detail.get("start_date"):
+            issue_payload["start_date"] = task_detail.get("start_date")
+
+        # Thêm story_points nếu có
+        if task_detail.get("story_points"):
+            issue_payload["story_points"] = task_detail.get("story_points")
+
+        # Thêm fix_version nếu có
+        if task_detail.get("fix_version"):
+            issue_payload["fix_version"] = task_detail.get("fix_version")
+
+        # Thêm sprint_id nếu có
+        if task_detail.get("sprint_id"):
+            issue_payload["sprint_id"] = task_detail.get("sprint_id")
+
+        logger.info(f"Creating Jira task for project {project_key} with payload: {issue_payload}")
+        result = jira_api.create_issue(project_key, issue_payload)
+
+        if result and not result.get("error") and result.get("key"):
+            results.append(
+                {"status": "success", "task_summary": task_detail.get("summary"), "issue_key": result.get("key"),
+                 "linked_epic_key": epic_key_to_link if epic_key_to_link else "N/A"})
+        else:
+            all_successful = False
+            error_message = "Failed to create task"
+            if result and result.get("message"):
+                if isinstance(result.get("message"), dict) and result.get("message").get('errorMessages'):
+                    error_message = ", ".join(result.get("message").get('errorMessages'))
+                elif isinstance(result.get("message"), str):
+                    error_message = result.get("message")
+
+            # Include Jira's raw error response if available and not too large or sensitive
+            error_details = result if result else "No response from Jira API"
+            # Avoid overly verbose logs or responses if 'details' could be huge
+            if isinstance(error_details, dict) and len(str(error_details)) > 1000:
+                error_details = {"errorMessages": error_details.get("errorMessages", []),
+                                 "errors": error_details.get("errors", {})}
+
+            results.append({"status": "error",
+                            "task_summary": task_detail.get("summary"),
+                            "message": error_message,
+                            "details": error_details,
+                            "linked_epic_key": epic_key_to_link if epic_key_to_link else "N/A"
+                            })
+            logger.error(
+                f"Failed to create task '{task_detail.get('summary')}': {error_message}. Details: {error_details}")
+
+    if all_successful:
+        return jsonify({"status": "success", "message": "All tasks created successfully.", "results": results})
+    else:
+        # Check if any task was successful, or if all failed due to (e.g.) epic issues before task creation
+        if any(r.get("status") == "success" for r in results):
+            return jsonify({"status": "partial_success", "message": "Some tasks/operations could not be completed.",
+                        "results": results}), 207  # Multi-Status
+        else:  # No task creation was successful at all
+            return jsonify({"status": "error", "message": "Failed to create any tasks. See details.",
+                            "results": results}), 500
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """
@@ -451,12 +674,131 @@ def health_check():
     """
     return {"status": "alive", "timestamp": datetime.now().isoformat()}, 200
 
+
+@app.route('/api/issue-types', methods=['GET'])
+def get_issue_types():
+    """
+    Get all issue types available in Jira
+    """
+    if not jira_api.is_configured():
+        return jsonify({"status": "error", "message": "Jira API not configured"}), 500
+
+    issue_types = jira_api.get_issue_types()
+    return jsonify({
+        "status": "success",
+        "issue_types": issue_types
+    })
+
+
+@app.route('/api/custom-fields', methods=['GET'])
+def get_custom_fields():
+    """
+    Get all custom fields to identify start_date and story_point fields
+    """
+    if not jira_api.is_configured():
+        return jsonify({"status": "error", "message": "Jira API not configured"}), 500
+
+    custom_fields = jira_api.find_custom_fields()
+    return jsonify({
+        "status": "success",
+        "custom_fields": custom_fields
+    })
+
+
+@app.route('/api/project-versions/<project_key>', methods=['GET'])
+def get_project_versions(project_key):
+    """
+    Get all versions for a project
+    """
+    if not jira_api.is_configured():
+        return jsonify({"status": "error", "message": "Jira API not configured"}), 500
+
+    versions = jira_api.get_project_versions(project_key)
+    return jsonify({
+        "status": "success",
+        "versions": versions
+    })
+
+
+@app.route('/api/version-issues/<project_key>/<version_id>', methods=['GET'])
+def get_version_issues(project_key, version_id):
+    """
+    Get issues for a specific version
+    """
+    if not jira_api.is_configured():
+        return jsonify({"status": "error", "message": "Jira API not configured"}), 500
+
+    issues = jira_api.get_issues_by_version(project_key, version_id)
+    return jsonify({
+        "status": "success",
+        "issues": issues
+    })
+
+
+@app.route('/api/project-sprints/<project_key>', methods=['GET'])
+def get_project_sprints(project_key):
+    """
+    Get active and future sprints for a project
+    """
+    if not jira_api.is_configured():
+        return jsonify({"status": "error", "message": "Jira API not configured"}), 500
+
+    sprints = jira_api.get_active_sprints(project_key, use_cache=False)
+    return jsonify({
+        "status": "success",
+        "sprints": sprints
+    })
+
+
+@app.route('/api/issues/<issue_key>', methods=['GET'])
+def get_issue_details(issue_key):
+    """
+    Get detailed information about a specific issue
+    """
+    if not jira_api.is_configured():
+        return jsonify({"status": "error", "message": "Jira API not configured"}), 500
+
+    issue = jira_api.get_issue_details(issue_key)
+    if not issue:
+        return jsonify({"status": "error", "message": f"Issue {issue_key} not found or access denied"}), 404
+
+    return jsonify({
+        "status": "success",
+        "issue": issue
+    })
+
+
+@app.route('/api/issues/<issue_key>', methods=['PUT'])
+def update_issue(issue_key):
+    """
+    Update an existing issue
+    """
+    if not jira_api.is_configured():
+        return jsonify({"status": "error", "message": "Jira API not configured"}), 500
+
+    data = request.json
+    if not data:
+        return jsonify({"status": "error", "message": "No update data provided"}), 400
+
+    result = jira_api.update_issue(issue_key, data)
+
+    if result and not result.get("error"):
+        return jsonify({
+            "status": "success",
+            "message": f"Issue {issue_key} updated successfully"
+        })
+    else:
+        return jsonify({
+            "status": "error",
+            "message": result.get("message", f"Failed to update issue {issue_key}")
+        }), 500
+
+
 if __name__ == '__main__':
     logger.info("Starting Jira Discord Notifier Web App")
-    # Create templates directory if it doesn't exist
     templates_dir = Path("templates")
     templates_dir.mkdir(exist_ok=True)
 
-    port = int(os.getenv('PORT', 5001))
+    port = int(os.getenv('PORT', 5002))
     host = os.getenv('HOST', '0.0.0.0')
-    app.run(host=host, port=port, debug=True)
+    app.run(host=host, port=port, debug=False)

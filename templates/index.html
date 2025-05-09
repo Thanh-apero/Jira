@@ -62,6 +62,17 @@
             right: 10px;
             font-size: 0.75rem;
         }
+        .project-add-task-icon {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            font-size: 1.2rem;
+            color: #0d6efd; /* Primary color */
+            cursor: pointer;
+        }
+        .project-add-task-icon:hover {
+            color: #0a58ca; /* Darker primary */
+        }
         .avatar-img {
             width: 24px;
             height: 24px;
@@ -70,6 +81,40 @@
         }
         .modal-dialog {
             max-width: 500px;
+        }
+        .modal-dialog-lg {
+            max-width: 95%;
+            margin: 1.75rem auto;
+        }
+        
+        /* Improve form inputs in the task table */
+        .task-input {
+            min-width: 120px;
+        }
+        
+        .task-textarea {
+            min-width: 150px;
+            min-height: 60px;
+        }
+        
+        .estimate-time-group {
+            display: flex;
+            align-items: center;
+        }
+        
+        .estimate-time-input {
+            width: 70%;
+        }
+        
+        .estimate-time-unit {
+            width: 30%;
+            margin-left: 5px;
+        }
+        
+        /* Improve task table appearance */
+        #taskTable th {
+            background-color: #f0f0f0;
+            white-space: nowrap;
         }
     </style>
 </head>
@@ -110,6 +155,28 @@
                     <input type="number" class="form-control" id="check_interval" name="check_interval"
                            value="{{ check_interval }}" min="1" max="1440">
                 </div>
+
+                <!-- Hidden input to store Jira URL for JS -->
+                <input type="hidden" id="jiraUrlInput" value="{{ jira_url }}">
+
+                <!-- Global Notification Settings -->
+                <h3>Global Notification Settings:</h3>
+                {% if global_notification_settings %}
+                    {% for key, is_enabled in global_notification_settings.items() %}
+                    <div>
+                        <input type="checkbox" 
+                               id="{{ key }}" 
+                               name="{{ key }}" 
+                               {% if is_enabled %}checked{% endif %}>
+                        <label for="{{ key }}">
+                            {{ key.replace('notify_', '').replace('_', ' ')|title }}
+                        </label>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <p>Global notification settings not available.</p>
+                {% endif %}
+                <br>
                 <button type="submit" class="btn btn-primary">Save Settings</button>
             </form>
         </div>
@@ -187,6 +254,10 @@
                                                 </span>
                                             {% endif %}
                                         </div>
+                                        <!-- Add Task Icon -->
+                                        <i class="bi bi-plus-circle-fill project-add-task-icon"
+                                           title="Add tasks to {{ project.name }}"
+                                           onclick="event.stopPropagation(); openAddTaskModal('{{ project.key }}', '{{ project.name }}')"></i>
                                     </div>
                                 </div>
                                 {% endfor %}
@@ -294,6 +365,168 @@
     </div>
 </div>
 
+<!-- Add Task Modal -->
+<div class="modal fade" id="addTaskModal" tabindex="-1" aria-labelledby="addTaskModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addTaskModalLabel">Add Tasks for Project: <span
+                        id="addTaskProjectName"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="addTaskProjectKey" value="">
+                <div class="mb-3">
+                    <label for="versionSelector" class="form-label">Fix Version (Optional)</label>
+                    <select class="form-select" id="versionSelector">
+                        <option value="">-- Select a version --</option>
+                        <!-- Versions will be loaded dynamically -->
+                    </select>
+                    <div class="form-text">Select a version to view its tasks and add new tasks to it</div>
+                </div>
+                <div class="mb-3">
+                    <label for="sprintSelector" class="form-label">Sprint (Optional)</label>
+                    <select class="form-select" id="sprintSelector">
+                        <option value="">-- Select a sprint --</option>
+                        <!-- Sprints will be loaded dynamically -->
+                    </select>
+                    <div class="form-text">Select a sprint to add tasks to</div>
+                </div>
+                <div class="mb-3" id="existingTasksSection" style="display: none;">
+                    <h5>Existing Tasks in Version</h5>
+                    <div class="mb-3">
+                        <div class="btn-group" role="group" aria-label="Issue type filter">
+                            <button type="button" class="btn btn-outline-primary active" data-issue-type="all">All
+                            </button>
+                            <button type="button" class="btn btn-outline-danger" data-issue-type="bug">Bugs</button>
+                            <button type="button" class="btn btn-outline-success" data-issue-type="task">Tasks</button>
+                            <button type="button" class="btn btn-outline-info" data-issue-type="epic">Epics</button>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-striped" id="existingTasksTable">
+                            <thead>
+                            <tr>
+                                <th>Key</th>
+                                <th>Summary</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Assignee</th>
+                                <th>Priority</th>
+                                <th>Due Date</th>
+                                <th>Actions</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <!-- Existing tasks will be loaded here -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <hr class="my-3">
+                </div>
+                <h5>New Tasks</h5>
+                <table class="table table-bordered" id="taskTable">
+                    <thead>
+                    <tr>
+                        <th>Summary</th>
+                        <th>Description</th>
+                        <th>Epic</th>
+                        <th>Priority</th>
+                        <th>Estimate Time</th>
+                        <th>Story Points</th>
+                        <th>Start Date</th>
+                        <th>Due Date</th>
+                        <th>Ghi chú</th>
+                        <th>Action</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <!-- Task rows will be added here by JavaScript -->
+                    </tbody>
+                </table>
+                <button type="button" class="btn btn-sm btn-outline-success" onclick="addTaskRow()">
+                    <i class="bi bi-plus-lg"></i> Add Row
+                </button>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-info" onclick="exportTasksToExcel()">
+                    <i class="bi bi-file-earmark-excel"></i> Export to Excel
+                </button>
+                <button type="button" class="btn btn-primary" onclick="createTasksOnJira()">
+                    <i class="bi bi-cloud-arrow-up"></i> Create Tasks on Jira
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Issue Modal -->
+<div class="modal fade" id="editIssueModal" tabindex="-1" aria-labelledby="editIssueModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editIssueModalLabel">Edit Issue <span id="editIssueKey"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editIssueForm">
+                    <input type="hidden" id="editIssueProjectKey" name="project_key">
+                    <div class="mb-3">
+                        <label for="editIssueSummary" class="form-label">Summary</label>
+                        <input type="text" class="form-control" id="editIssueSummary" name="summary" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editIssuePriority" class="form-label">Priority</label>
+                        <select class="form-select" id="editIssuePriority" name="priority">
+                            <option value="Highest">Highest</option>
+                            <option value="High">High</option>
+                            <option value="Medium">Medium</option>
+                            <option value="Low">Low</option>
+                            <option value="Lowest">Lowest</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editIssueFixVersion" class="form-label">Fix Version</label>
+                        <select class="form-select" id="editIssueFixVersion" name="fix_version">
+                            <option value="">-- No fix version --</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editIssueSprint" class="form-label">Sprint</label>
+                        <select class="form-select" id="editIssueSprint" name="sprint_id">
+                            <option value="">-- No sprint --</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editIssueStartDate" class="form-label">Start Date</label>
+                        <input type="date" class="form-control" id="editIssueStartDate" name="start_date">
+                    </div>
+                    <div class="mb-3">
+                        <label for="editIssueDueDate" class="form-label">Due Date</label>
+                        <input type="date" class="form-control" id="editIssueDueDate" name="due_date">
+                    </div>
+                    <div class="mb-3">
+                        <label for="editIssueEstimateValue" class="form-label">Original Estimate</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control" id="editIssueEstimateValue" min="0" step="1">
+                            <select class="form-select" id="editIssueEstimateUnit">
+                                <option value="m">Minutes</option>
+                                <option value="h" selected>Hours</option>
+                                <option value="d">Days</option>
+                            </select>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="updateIssue()">Update Issue</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- JavaScript -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
 <script>
@@ -352,6 +585,576 @@
         .catch(error => {
             console.error('Error:', error);
             alert('Failed to update webhook');
+        });
+    }
+
+    // Add Task Modal functions
+    function openAddTaskModal(projectKey, projectName) {
+        document.getElementById('addTaskProjectKey').value = projectKey;
+        document.getElementById('addTaskProjectName').textContent = projectName;
+        
+        // Clear existing rows in task table
+        const taskTableBody = document.getElementById('taskTable').getElementsByTagName('tbody')[0];
+        taskTableBody.innerHTML = ''; 
+        addTaskRow(); // Add one empty row initially
+        
+        // Hide existing tasks section and clear its content
+        document.getElementById('existingTasksSection').style.display = 'none';
+        const existingTasksTable = document.getElementById('existingTasksTable').getElementsByTagName('tbody')[0];
+        existingTasksTable.innerHTML = '';
+        
+        // Reset version and sprint selectors
+        document.getElementById('versionSelector').innerHTML = '<option value="">-- Select a version --</option>';
+        document.getElementById('sprintSelector').innerHTML = '<option value="">-- Select a sprint --</option>';
+        
+        // Load versions for this project
+        loadProjectVersions(projectKey);
+        
+        // Load sprints for this project
+        loadProjectSprints(projectKey);
+
+        const addTaskModal = new bootstrap.Modal(document.getElementById('addTaskModal'));
+        addTaskModal.show();
+    }
+
+    function addTaskRow() {
+        const tableBody = document.getElementById('taskTable').getElementsByTagName('tbody')[0];
+        const newRow = tableBody.insertRow();
+        const columns = ['summary', 'description', 'epic', 'priority', 'estimate_time', 'story_points', 'start_date', 'due_date', 'notes'];
+        
+        columns.forEach(colName => {
+            const cell = newRow.insertCell();
+            if (colName === 'start_date' || colName === 'due_date') {
+                cell.innerHTML = `<input type="date" class="form-control form-control-sm task-input" name="${colName}[]">`;
+            } else if (colName === 'priority') {
+                cell.innerHTML = `
+                    <select class="form-select form-select-sm task-input" name="priority[]">
+                        <option value="Highest">Highest</option>
+                        <option value="High">High</option>
+                        <option value="Medium" selected>Medium</option>
+                        <option value="Low">Low</option>
+                        <option value="Lowest">Lowest</option>
+                    </select>`;
+            } else if (colName === 'description' || colName === 'notes') {
+                 cell.innerHTML = `<textarea class="form-control form-control-sm task-textarea" name="${colName}[]" rows="3"></textarea>`;
+            } else if (colName === 'estimate_time') {
+                cell.innerHTML = `
+                    <div class="estimate-time-group">
+                        <input type="number" class="form-control form-control-sm estimate-time-input" 
+                               name="estimate_value[]" placeholder="Value" min="0" step="1">
+                        <select class="form-select form-select-sm estimate-time-unit" name="estimate_unit[]">
+                            <option value="m">Minutes</option>
+                            <option value="h" selected>Hours</option>
+                            <option value="d">Days</option>
+                        </select>
+                    </div>`;
+            } else {
+                cell.innerHTML = `<input type="text" class="form-control form-control-sm task-input" name="${colName}[]">`;
+            }
+        });
+
+        const actionCell = newRow.insertCell();
+        actionCell.innerHTML = '<button type="button" class="btn btn-sm btn-danger" onclick="removeTaskRow(this)"><i class="bi bi-trash"></i></button>';
+    }
+
+    function removeTaskRow(button) {
+        const row = button.closest('tr');
+        row.remove();
+    }
+
+    function exportTasksToExcel() {
+        // Placeholder for Excel export functionality
+        alert('Export to Excel functionality to be implemented.');
+        console.log('Exporting tasks for project: ', document.getElementById('addTaskProjectKey').value);
+        // Logic to gather data from the table and convert to Excel
+    }
+
+    function createTasksOnJira() {
+        const projectKey = document.getElementById('addTaskProjectKey').value;
+        const rows = document.getElementById('taskTable').getElementsByTagName('tbody')[0].rows;
+        const tasks = [];
+        let formIsValid = true;
+
+        if (rows.length === 0) {
+            alert('Please add at least one task.');
+            return;
+        }
+
+        for (let i = 0; i < rows.length; i++) {
+            const cells = rows[i].cells;
+            const summaryInput = cells[0].querySelector('input, textarea, select');
+            const summary = summaryInput.value.trim();
+
+            if (!summary) {
+                alert(`Task ${i + 1}: Summary is required.`);
+                summaryInput.focus();
+                formIsValid = false;
+                break;
+            }
+
+            // Get estimate time value and unit
+            let estimateTimeValue = '';
+            const estimateValueInput = cells[4].querySelector('input[name="estimate_value[]"]');
+            const estimateUnitSelect = cells[4].querySelector('select[name="estimate_unit[]"]');
+            
+            if (estimateValueInput && estimateUnitSelect && estimateValueInput.value) {
+                estimateTimeValue = estimateValueInput.value + estimateUnitSelect.value;
+            }
+
+            const taskData = {
+                summary: summary,
+                description: cells[1].querySelector('input, textarea, select').value,
+                epic: cells[2].querySelector('input, textarea, select').value, // This should be an Epic Key if used for Epic Link
+                priority: cells[3].querySelector('input, textarea, select').value,
+                estimate_time: estimateTimeValue, // Now properly formatted as "2h", "30m", etc.
+                story_points: cells[5].querySelector('input, textarea, select').value,
+                start_date: cells[6].querySelector('input, textarea, select').value, // YYYY-MM-DD
+                due_date: cells[7].querySelector('input, textarea, select').value,     // YYYY-MM-DD
+                notes: cells[8].querySelector('input, textarea, select').value,
+                // Add fix version if selected
+                fix_version: document.getElementById('versionSelector').value || null,
+                // Add sprint ID if selected
+                sprint_id: document.getElementById('sprintSelector').value || null,
+            };
+            tasks.push(taskData);
+        }
+
+        if (!formIsValid) {
+            return;
+        }
+
+        console.log('Creating tasks on Jira for project: ', projectKey, tasks);
+        
+        // Disable button to prevent multiple submissions
+        const createButton = document.querySelector('#addTaskModal .btn-primary[onclick="createTasksOnJira()"]');
+        createButton.disabled = true;
+        createButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Creating...';
+
+        fetch('/projects/create-tasks', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                // Add CSRF token header if your Flask app uses Flask-WTF or similar for CSRF protection
+            },
+            body: JSON.stringify({ 
+                project_key: projectKey, 
+                tasks: tasks 
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            console.log("Response from server:", data);
+            if (data.status === 'success') {
+                alert(data.message || 'Tasks created successfully!');
+                const addTaskModal = bootstrap.Modal.getInstance(document.getElementById('addTaskModal'));
+                addTaskModal.hide();
+                window.location.reload(); // Reload to see changes or update UI dynamically
+            } else if (data.status === 'partial_success') {
+                let alertMessage = (data.message || "Some tasks could not be created.") + "\n\nResults:\n";
+                data.results.forEach(res => {
+                    alertMessage += `- ${res.task_summary}: ${res.status}`;
+                    if(res.status === 'error') {
+                        alertMessage += ` (Error: ${res.message || 'Unknown error'})\n`;
+                    }
+                });
+                alert(alertMessage);
+            } else {
+                // General error or specific error from server
+                let errorMessage = data.message || "Failed to create tasks.";
+                if (data.results && Array.isArray(data.results)) {
+                    const failedTasks = data.results.filter(r => r.status === 'error');
+                    if (failedTasks.length > 0) {
+                        errorMessage += "\nDetails:\n";
+                        failedTasks.forEach(ft => {
+                            errorMessage += `- ${ft.task_summary}: ${ft.message}\n`;
+                        });
+                    }
+                }
+                alert("Error: " + errorMessage);
+            }
+        })
+        .catch(error => {
+            console.error('Error creating tasks:', error);
+            alert('An unexpected error occurred while creating tasks. Please check the console.');
+        })
+        .finally(() => {
+            // Re-enable button
+            createButton.disabled = false;
+            createButton.innerHTML = '<i class="bi bi-cloud-arrow-up"></i> Create Tasks on Jira';
+        });
+    }
+
+    // Function to load project versions
+    function loadProjectVersions(projectKey) {
+        const versionSelector = document.getElementById('versionSelector');
+        // Clear previous options
+        versionSelector.innerHTML = '<option value="">-- Select a version --</option>';
+        
+        fetch(`/api/project-versions/${projectKey}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success' && data.versions && data.versions.length > 0) {
+                    data.versions.forEach(version => {
+                        const option = document.createElement('option');
+                        option.value = version.id;
+                        option.textContent = `${version.name}${version.released ? ' (Released)' : ''}${version.archived ? ' (Archived)' : ''}`;
+                        versionSelector.appendChild(option);
+                    });
+                    
+                    // Remove any existing event listeners to prevent duplicate requests
+                    versionSelector.removeEventListener('change', handleVersionChange);
+                    
+                    // Add event listener to load tasks when version changes
+                    versionSelector.addEventListener('change', handleVersionChange);
+                } else {
+                    console.log('No versions found or error loading versions');
+                }
+            })
+            .catch(error => {
+                console.error('Error loading versions:', error);
+            });
+    }
+    
+    // Function to load project sprints
+    function loadProjectSprints(projectKey) {
+        const sprintSelector = document.getElementById('sprintSelector');
+        // Clear previous options
+        sprintSelector.innerHTML = '<option value="">-- Select a sprint --</option>';
+        
+        fetch(`/api/project-sprints/${projectKey}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success' && data.sprints && data.sprints.length > 0) {
+                    data.sprints.forEach(sprint => {
+                        const option = document.createElement('option');
+                        option.value = sprint.id;
+                        option.textContent = `${sprint.name} (${sprint.state})`;
+                        if (sprint.boardName) {
+                            option.textContent += ` - ${sprint.boardName}`;
+                        }
+                        sprintSelector.appendChild(option);
+                    });
+                } else {
+                    console.log('No sprints found or error loading sprints');
+                }
+            })
+            .catch(error => {
+                console.error('Error loading sprints:', error);
+            });
+    }
+    
+    // Separate function to handle version changes to avoid duplicate listeners
+    function handleVersionChange() {
+        const selectedVersionId = this.value;
+        const currentProjectKey = document.getElementById('addTaskProjectKey').value;
+        
+        if (selectedVersionId) {
+            loadVersionIssues(currentProjectKey, selectedVersionId);
+        } else {
+            // Hide existing tasks section when no version is selected
+            document.getElementById('existingTasksSection').style.display = 'none';
+        }
+    }
+
+    // Function to load issues for a specific version
+    function loadVersionIssues(projectKey, versionId) {
+        const existingTasksTable = document.getElementById('existingTasksTable').getElementsByTagName('tbody')[0];
+        existingTasksTable.innerHTML = '<tr><td colspan="8" class="text-center">Loading...</td></tr>';
+        
+        // Show the existing tasks section
+        document.getElementById('existingTasksSection').style.display = 'block';
+        
+        // Store the loaded issues globally for filtering
+        window.versionIssuesCache = [];
+        
+        fetch(`/api/version-issues/${projectKey}/${versionId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success' && data.issues && data.issues.length > 0) {
+                    // Save issues to cache for filtering
+                    window.versionIssuesCache = data.issues;
+                    
+                    // Show all issues initially
+                    displayFilteredIssues('all');
+                } else {
+                    existingTasksTable.innerHTML = '<tr><td colspan="8" class="text-center">No issues found in this version</td></tr>';
+                }
+            })
+            .catch(error => {
+                console.error('Error loading version issues:', error);
+                existingTasksTable.innerHTML = '<tr><td colspan="8" class="text-center text-danger">Error loading issues</td></tr>';
+            });
+            
+        // Set up filter button event listeners
+        const filterButtons = document.querySelectorAll('#existingTasksSection .btn-group button');
+        filterButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                // Remove active class from all buttons
+                filterButtons.forEach(btn => btn.classList.remove('active'));
+                
+                // Add active class to clicked button
+                this.classList.add('active');
+                
+                // Get the issue type to filter by
+                const issueType = this.getAttribute('data-issue-type');
+                
+                // Filter and display issues
+                displayFilteredIssues(issueType);
+            });
+        });
+    }
+    
+    // Function to display issues filtered by type
+    function displayFilteredIssues(issueType) {
+        const existingTasksTable = document.getElementById('existingTasksTable').getElementsByTagName('tbody')[0];
+        existingTasksTable.innerHTML = '';
+        
+        if (!window.versionIssuesCache || window.versionIssuesCache.length === 0) {
+            existingTasksTable.innerHTML = '<tr><td colspan="8" class="text-center">No issues found</td></tr>';
+            return;
+        }
+        
+        const filteredIssues = issueType === 'all' 
+            ? window.versionIssuesCache 
+            : window.versionIssuesCache.filter(issue => {
+                const type = issue.fields?.issuetype?.name.toLowerCase() || '';
+                
+                if (issueType === 'bug') {
+                    return type.includes('bug') || type.includes('defect');
+                } else if (issueType === 'task') {
+                    return type.includes('task') || type.includes('story');
+                } else if (issueType === 'epic') {
+                    return type.includes('epic');
+                }
+                
+                return true;
+            });
+            
+        if (filteredIssues.length === 0) {
+            existingTasksTable.innerHTML = `<tr><td colspan="8" class="text-center">No ${issueType !== 'all' ? issueType + ' ' : ''}issues found</td></tr>`;
+            return;
+        }
+        
+        filteredIssues.forEach(issue => {
+            const row = existingTasksTable.insertRow();
+            
+            // Key with link
+            const keyCell = row.insertCell();
+            const jiraBaseUrl = document.getElementById('jiraUrlInput')?.value || '';
+            keyCell.innerHTML = `<a href="${jiraBaseUrl}/browse/${issue.key}" target="_blank">${issue.key}</a>`;
+            
+            // Summary
+            row.insertCell().textContent = issue.fields?.summary || '';
+            
+            // Issue Type with icon
+            const typeCell = row.insertCell();
+            const issueType = issue.fields?.issuetype || {};
+            const iconUrl = issueType.iconUrl || '';
+            const typeName = issueType.name || 'Unknown';
+            typeCell.innerHTML = iconUrl 
+                ? `<img src="${iconUrl}" alt="${typeName}" title="${typeName}" height="16" width="16"> ${typeName}`
+                : typeName;
+            
+            // Status
+            row.insertCell().textContent = issue.fields?.status?.name || '';
+            
+            // Assignee
+            row.insertCell().textContent = issue.fields?.assignee?.displayName || 'Unassigned';
+            
+            // Priority
+            row.insertCell().textContent = issue.fields?.priority?.name || '';
+            
+            // Due Date
+            const dueDate = issue.fields?.duedate ? new Date(issue.fields.duedate).toLocaleDateString() : '';
+            row.insertCell().textContent = dueDate;
+            
+            // Actions
+            const actionsCell = row.insertCell();
+            actionsCell.innerHTML = `
+                <button class="btn btn-sm btn-outline-primary" 
+                        onclick="openEditIssueModal('${issue.key}')" title="Edit">
+                    <i class="bi bi-pencil"></i>
+                </button>
+            `;
+        });
+    }
+    
+    // Function to open the edit issue modal
+    function openEditIssueModal(issueKey) {
+        document.getElementById('editIssueKey').textContent = issueKey;
+        
+        const projectKey = document.getElementById('addTaskProjectKey').value;
+        document.getElementById('editIssueProjectKey').value = projectKey;
+        
+        // Populate edit form fields with issue data
+        fetch(`/api/issues/${issueKey}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success' && data.issue) {
+                    const issue = data.issue;
+                    const fields = issue.fields;
+                    
+                    // Populate basic fields
+                    document.getElementById('editIssueSummary').value = fields.summary || '';
+                    
+                    // Set priority if available
+                    if (fields.priority) {
+                        document.getElementById('editIssuePriority').value = fields.priority.name;
+                    }
+                    
+                    // Set due date if available
+                    if (fields.duedate) {
+                        document.getElementById('editIssueDueDate').value = fields.duedate;
+                    }
+                    
+                    // Set start date if available (customfield)
+                    if (fields.customfield_10015) {
+                        document.getElementById('editIssueStartDate').value = fields.customfield_10015;
+                    }
+                    
+                    // Load fix versions for the dropdown
+                    loadEditIssueVersions(projectKey, fields.fixVersions);
+                    
+                    // Load sprints for the dropdown and select the current one if available
+                    loadEditIssueSprints(projectKey);
+                    
+                    // Parse estimate if available
+                    // This is more complex as the estimate might be in different formats
+                    // For simplicity, we'll just clear the fields
+                    document.getElementById('editIssueEstimateValue').value = '';
+                    document.getElementById('editIssueEstimateUnit').value = 'h';
+                    
+                    // Show the modal
+                    const modal = new bootstrap.Modal(document.getElementById('editIssueModal'));
+                    modal.show();
+                } else {
+                    console.error('Failed to load issue details:', data.message);
+                    alert('Could not load issue details. Please try again.');
+                }
+            })
+            .catch(error => {
+                console.error('Error loading issue details:', error);
+                alert('An error occurred while loading issue details.');
+            });
+    }
+    
+    // Load versions for the edit form
+    function loadEditIssueVersions(projectKey, currentVersions) {
+        const versionSelect = document.getElementById('editIssueFixVersion');
+        versionSelect.innerHTML = '<option value="">-- No fix version --</option>';
+        
+        let currentVersionId = null;
+        if (currentVersions && currentVersions.length > 0) {
+            currentVersionId = currentVersions[0].id;
+        }
+        
+        fetch(`/api/project-versions/${projectKey}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success' && data.versions && data.versions.length > 0) {
+                    data.versions.forEach(version => {
+                        const option = document.createElement('option');
+                        option.value = version.id;
+                        option.textContent = `${version.name}${version.released ? ' (Released)' : ''}${version.archived ? ' (Archived)' : ''}`;
+                        
+                        if (version.id === currentVersionId) {
+                            option.selected = true;
+                        }
+                        
+                        versionSelect.appendChild(option);
+                    });
+                }
+            })
+            .catch(error => {
+                console.error('Error loading versions for edit:', error);
+            });
+    }
+    
+    // Load sprints for the edit form
+    function loadEditIssueSprints(projectKey) {
+        const sprintSelect = document.getElementById('editIssueSprint');
+        sprintSelect.innerHTML = '<option value="">-- No sprint --</option>';
+        
+        fetch(`/api/project-sprints/${projectKey}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success' && data.sprints && data.sprints.length > 0) {
+                    data.sprints.forEach(sprint => {
+                        const option = document.createElement('option');
+                        option.value = sprint.id;
+                        option.textContent = `${sprint.name} (${sprint.state})`;
+                        if (sprint.boardName) {
+                            option.textContent += ` - ${sprint.boardName}`;
+                        }
+                        sprintSelect.appendChild(option);
+                    });
+                }
+            })
+            .catch(error => {
+                console.error('Error loading sprints for edit:', error);
+            });
+    }
+    
+    // Update an issue
+    function updateIssue() {
+        const issueKey = document.getElementById('editIssueKey').textContent;
+        
+        // Build update data
+        const updateData = {
+            summary: document.getElementById('editIssueSummary').value,
+            priority: document.getElementById('editIssuePriority').value,
+            fix_version: document.getElementById('editIssueFixVersion').value || null,
+            sprint_id: document.getElementById('editIssueSprint').value || null,
+            start_date: document.getElementById('editIssueStartDate').value || null,
+            due_date: document.getElementById('editIssueDueDate').value || null
+        };
+        
+        // Add estimate if provided
+        const estimateValue = document.getElementById('editIssueEstimateValue').value;
+        if (estimateValue) {
+            const estimateUnit = document.getElementById('editIssueEstimateUnit').value;
+            updateData.original_estimate = `${estimateValue}${estimateUnit}`;
+        }
+        
+        // Disable the update button to prevent double submissions
+        const updateButton = document.querySelector('#editIssueModal .btn-primary');
+        updateButton.disabled = true;
+        updateButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Updating...';
+        
+        fetch(`/api/issues/${issueKey}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(updateData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                // Close the modal
+                const modal = bootstrap.Modal.getInstance(document.getElementById('editIssueModal'));
+                modal.hide();
+                
+                // If we were viewing a version's issues, refresh the list
+                const versionSelector = document.getElementById('versionSelector');
+                if (versionSelector.value) {
+                    loadVersionIssues(document.getElementById('addTaskProjectKey').value, versionSelector.value);
+                }
+                
+                alert('Issue updated successfully');
+            } else {
+                alert(`Error updating issue: ${data.message}`);
+                console.error('Error updating issue:', data);
+            }
+        })
+        .catch(error => {
+            console.error('Error updating issue:', error);
+            alert('An unexpected error occurred while updating the issue.');
+        })
+        .finally(() => {
+            // Re-enable button
+            updateButton.disabled = false;
+            updateButton.innerHTML = 'Update Issue';
         });
     }
 </script>

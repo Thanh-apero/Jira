@@ -13,7 +13,6 @@ PROJECT_SETTINGS_FILE = "project_settings.pkl"
 # Create a lock for thread safety
 settings_lock = threading.Lock()
 
-
 class ProjectManager:
     def __init__(self):
         """Initialize project manager and load saved settings"""
