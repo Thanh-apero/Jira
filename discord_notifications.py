@@ -1,6 +1,7 @@
 import os
 import logging
 import requests
+import re
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,24 @@ class DiscordNotifier:
             # Format for Discord mention is <@USER_ID> with the numeric ID
             return f"<@{discord_id}>"
         return ""
+
+    def parse_jira_links(self, text):
+        """
+        Parse Jira markdown links and convert them to plain format
+        Handles formats like:
+        - URL|URL|smart-link
+        - [display text|URL]
+        """
+        # Handle cases where URL is duplicated with pipes
+        # Example: https://github.com/repo/pull/123|https://github.com/repo/pull/123|smart-link
+        pipe_url_pattern = re.compile(r'(https?://[^\s|]+)\|(?:https?://[^\s|]+\|)?(?:smart-link|[^\s|]+)')
+        text = pipe_url_pattern.sub(r'\1', text)
+
+        # Handle [text|URL] format
+        bracket_link_pattern = re.compile(r'\[([^\]]+)\|(https?://[^\]]+)\]')
+        text = bracket_link_pattern.sub(r'\1 (\2)', text)
+
+        return text
 
     def send_notification(self, title, description, color=16711680, fields=None, webhook_url=None):
         """
@@ -184,16 +203,19 @@ class DiscordNotifier:
         # Add mention if applicable
         mention = self.get_discord_mention(assignee)
 
+        # Parse any Jira links in comment body
+        parsed_comment_body = self.parse_jira_links(comment_body)
+
         # Limit comment length for display
-        if len(comment_body) > 200:
-            comment_body = comment_body[:197] + "..."
+        if len(parsed_comment_body) > 200:
+            parsed_comment_body = parsed_comment_body[:197] + "..."
 
         fields = [
             {"name": "Issue", "value": issue_key, "inline": True},
             {"name": "Commenter", "value": comment_author, "inline": True},
             {"name": "Assignee", "value": assignee, "inline": True},
             {"name": "Project", "value": project_name, "inline": True},
-            {"name": "Content", "value": comment_body, "inline": False},
+            {"name": "Content", "value": parsed_comment_body, "inline": False},
             {"name": "Link", "value": f"{os.getenv('JIRA_URL')}/browse/{issue_key}?focusedCommentId={comment_id}",
              "inline": False}
         ]
