@@ -1,2 +1,1 @@
-web: gunicorn --workers 3 --bind 0.0.0.0:$PORT wsgi:app
-worker: bash -c './railway_start.sh'
+web: bash -c './init_script.sh && gunicorn --bind 0.0.0.0:${PORT} app:app'
