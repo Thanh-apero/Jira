@@ -841,9 +841,11 @@ if __name__ == '__main__':
     templates_dir = Path("templates")
     templates_dir.mkdir(exist_ok=True)
 
-    # Use PORT from environment or default to 5003
-    port = int(os.getenv('PORT', 5003))
+    # Use PORT from Railway environment
+    port = int(os.environ.get('PORT', 5003))
     # Use HOST from environment or default to 0.0.0.0
-    host = os.getenv('HOST', '0.0.0.0')
+    host = os.environ.get('HOST', '0.0.0.0')
+    # Log port and host for debugging
+    logger.info(f"Starting Flask server on {host}:{port}")
     # Start the Flask application
     app.run(host=host, port=port, debug=False)
