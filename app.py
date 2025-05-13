@@ -25,6 +25,13 @@ except Exception as e:
 app = Flask(__name__, static_folder='static')
 app.secret_key = os.getenv("SECRET_KEY", "jira-discord-notifier-secret")
 
+
+# Add explicit favicon route
+@app.route('/favicon.ico')
+def favicon():
+    return app.send_static_file('favicon.ico')
+
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
