@@ -22,7 +22,7 @@ try:
 except Exception as e:
     basic_logger.warning(f"Could not load .env file: {str(e)}. Continuing with environment variables.")
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static')
 app.secret_key = os.getenv("SECRET_KEY", "jira-discord-notifier-secret")
 
 # Set up logging
@@ -840,6 +840,10 @@ if __name__ == '__main__':
     logger.info("Starting Jira Discord Notifier Web App")
     templates_dir = Path("templates")
     templates_dir.mkdir(exist_ok=True)
+
+    # Ensure static directory exists
+    static_dir = Path("static")
+    static_dir.mkdir(exist_ok=True)
 
     # Use PORT from environment or default to 5003
     port = int(os.getenv('PORT', 5003))
