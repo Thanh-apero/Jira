@@ -726,7 +726,7 @@ class JiraAPI:
         if len(bug_issue_types) == 1:
             issuetype_clause = f"issuetype = \"{bug_issue_types[0]}\""
         else:
-            issuetype_clause = f"issuetype IN ({', '.join([f'\"{bt}\"' for bt in bug_issue_types])})"
+            issuetype_clause = f"issuetype IN ({', '.join(['\"' + bt + '\"' for bt in bug_issue_types])})"
 
         bug_jql = f"{issuetype_clause} AND status in ('To Do', 'In Progress', 'Todo', 'Open') AND project in ({','.join(project_keys)})"
 
