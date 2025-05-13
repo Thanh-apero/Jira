@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "bash -c \"mkdir -p static 2>/dev/null; touch static/favicon.ico 2>/dev/null; gunicorn --workers 2 --timeout 120 --bind 0.0.0.0:${PORT:-5000} app:app\"",
+    "startCommand": "bash -c \"mkdir -p static 2>/dev/null; touch static/favicon.ico 2>/dev/null; gunicorn --workers 1 --timeout 180 --bind 0.0.0.0:${PORT:-5000} wsgi:app\"",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
