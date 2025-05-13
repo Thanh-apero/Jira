@@ -5,14 +5,22 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, f
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 from pathlib import Path
+import atexit
 
 # Import our modules
 from jira_api import JiraAPI
 from discord_notifications import DiscordNotifier
 from project_management import ProjectManager
 
+# Set up basic logging early for dotenv errors
+logging.basicConfig(level=logging.INFO)
+basic_logger = logging.getLogger(__name__)
+
 # Load environment variables
-load_dotenv()
+try:
+    load_dotenv()
+except Exception as e:
+    basic_logger.warning(f"Could not load .env file: {str(e)}. Continuing with environment variables.")
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "jira-discord-notifier-secret")
@@ -59,6 +67,8 @@ project_manager = ProjectManager()
 scheduler = BackgroundScheduler()
 scheduler.start()
 
+# Shut down the scheduler when the program exits
+atexit.register(lambda: scheduler.shutdown())
 
 @scheduler.scheduled_job('interval', minutes=CHECK_INTERVAL, id='scheduled_bug_check')
 def scheduled_bug_check():
@@ -346,7 +356,7 @@ def scheduled_upcoming_check():
     check_upcoming_deadlines(3)  # 3 days
 
 # Web interface routes
-@app.route('/')
+@app.route('/', methods=['GET'])
 def index():
     """
     Main page showing available projects and settings
@@ -373,6 +383,27 @@ def index():
                            discord_url=discord_url,
                            check_interval=CHECK_INTERVAL,
                            global_notification_settings=global_notification_settings)
+
+
+@app.route('/healthz', methods=['GET'])
+def health_check_railway():
+    """
+    Simple health check endpoint for Railway
+    """
+    # In Railway environment, we want to return 200 as long as the app is running
+    # even if services aren't fully configured
+    status = {
+        "status": "alive",
+        "timestamp": datetime.now().isoformat(),
+        "services": {
+            "jira_configured": jira_api.is_configured(),
+            "discord_webhook_configured": bool(discord_notifier.default_webhook_url),
+            "scheduler_running": scheduler.running
+        },
+        "healthy": True  # Always return healthy for Railway
+    }
+
+    return status, 200
 
 
 @app.route('/projects/toggle/<project_key>', methods=['POST'])
@@ -664,11 +695,26 @@ def create_jira_tasks():
 
 
 @app.route('/health', methods=['GET'])
+@app.route('/api/health', methods=['GET'])
 def health_check():
     """
     Simple health check endpoint
+    Also available at /api/health for API consistency
     """
-    return {"status": "alive", "timestamp": datetime.now().isoformat()}, 200
+    # In Railway environment, we want to return 200 as long as the app is running
+    # even if services aren't fully configured
+    status = {
+        "status": "alive",
+        "timestamp": datetime.now().isoformat(),
+        "services": {
+            "jira_configured": jira_api.is_configured(),
+            "discord_webhook_configured": bool(discord_notifier.default_webhook_url),
+            "scheduler_running": scheduler.running
+        },
+        "healthy": True  # Always return healthy for Railway
+    }
+
+    return status, 200
 
 
 @app.route('/api/issue-types', methods=['GET'])
@@ -795,6 +841,6 @@ if __name__ == '__main__':
     templates_dir = Path("templates")
     templates_dir.mkdir(exist_ok=True)
 
-    port = int(os.getenv('PORT', 5002))
+    port = int(os.getenv('PORT', 5003))
     host = os.getenv('HOST', '0.0.0.0')
     app.run(host=host, port=port, debug=False)

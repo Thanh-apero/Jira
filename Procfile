@@ -1,1 +1,1 @@
-web: gunicorn app:app
+web: bash -c './init_script.sh && gunicorn --bind 0.0.0.0:$PORT app:app'
