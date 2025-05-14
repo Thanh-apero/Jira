@@ -3,6 +3,10 @@ FROM python:3.9-slim
 WORKDIR /app
 
 COPY requirements.txt .
+
+# Cài đặt numpy trước với phiên bản cụ thể để đảm bảo tương thích
+RUN pip install --no-cache-dir numpy==1.24.3
+# Sau đó cài đặt các gói còn lại
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
