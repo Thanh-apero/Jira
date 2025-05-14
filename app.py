@@ -471,26 +471,48 @@ def update_settings():
         flash('Check interval must be a number', 'error')
         return redirect(url_for('index'))
 
-    with open('.env', 'r') as f:
-        env_lines = f.readlines()
+    # Safely read current .env content
+    try:
+        with open('.env', 'r') as f:
+            env_lines = f.readlines()
+    except FileNotFoundError:
+        env_lines = []
 
+    # Settings to be explicitly managed and written
+    # Convert boolean values to lowercase strings 'true'/'false' for consistency with .env loading
+    managed_settings = {
+        'DISCORD_WEBHOOK_URL': discord_url,
+        'CHECK_INTERVAL': str(check_interval)
+    }
+    for key, value in new_global_notification_settings.items():
+        managed_settings[key.upper()] = str(value).lower()
+
+    # Write to .env
     with open('.env', 'w') as f:
-        for line in env_lines:
-            if line.strip().startswith('DISCORD_WEBHOOK_URL='):
-                f.write(f'DISCORD_WEBHOOK_URL={discord_url}\n')
-            elif line.strip().startswith('CHECK_INTERVAL='):
-                f.write(f'CHECK_INTERVAL={check_interval}\n')
-            else:
-                is_notification_setting_line = False
-                for notify_key in DEFAULT_GLOBAL_NOTIFICATION_SETTINGS.keys():
-                    if line.strip().startswith(notify_key.upper() + '='):
-                        is_notification_setting_line = True
-                        break
-                if not is_notification_setting_line:
-                    f.write(line)
+        # Write lines from original .env, skipping those we manage to avoid duplication
+        # and to ensure their values are updated from managed_settings.
+        written_keys_from_managed = set()  # To track which managed keys were found and replaced
 
-        for key, value in new_global_notification_settings.items():
-            f.write(f"{key.upper()}={value}\n")
+        for line in env_lines:
+            stripped_line = line.strip()
+            is_managed_line = False
+            if '=' in stripped_line:
+                key_part = stripped_line.split('=', 1)[0]
+                if key_part in managed_settings:
+                    # This line is for a setting we are managing.
+                    # We will write its new value from managed_settings later.
+                    # So, we effectively skip writing the old version here.
+                    is_managed_line = True
+                    # We don't need to add to written_keys_from_managed here,
+                    # as we are just deciding whether to write the original line or not
+
+            if not is_managed_line:
+                f.write(line)  # Write unmanaged lines or lines whose keys are not in managed_settings
+
+        # Now write all managed settings, ensuring they are present and up-to-date.
+        # This also adds any managed settings that were not in the original .env file.
+        for key, value in managed_settings.items():
+            f.write(f"{key}={value}\n")
 
     discord_notifier.default_webhook_url = discord_url
     CHECK_INTERVAL = check_interval
