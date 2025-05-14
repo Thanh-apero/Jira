@@ -430,12 +430,11 @@
                     <tr>
                         <th>Summary</th>
                         <th>Description</th>
-                        <th>Epic</th>
+                        <th>Type</th>
                         <th>Priority</th>
-                        <th>Estimate Time</th>
+                        <th>Estimate Time (h)</th>
                         <th>Story Points</th>
                         <th>Start Date</th>
-                        <th>Due Date</th>
                         <th>Ghi chú</th>
                         <th>Action</th>
                     </tr>
@@ -453,6 +452,15 @@
                 <button type="button" class="btn btn-info" onclick="exportTasksToExcel()">
                     <i class="bi bi-file-earmark-excel"></i> Export to Excel
                 </button>
+                <a href="/static/sample_template.xlsx" class="btn btn-outline-success">
+                    <i class="bi bi-download"></i> Download Template
+                </a>
+                <button type="button" class="btn btn-success"
+                        onclick="document.getElementById('excelFileInput').click()">
+                    <i class="bi bi-file-earmark-excel-fill"></i> Import Excel
+                </button>
+                <input type="file" id="excelFileInput" style="display:none" accept=".xlsx"
+                       onchange="importTasksFromExcel(this)">
                 <button type="button" class="btn btn-primary" onclick="createTasksOnJira()">
                     <i class="bi bi-cloud-arrow-up"></i> Create Tasks on Jira
                 </button>
@@ -529,6 +537,7 @@
 
 <!-- JavaScript -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
     function toggleProject(projectKey) {
         fetch(`/projects/toggle/${projectKey}`, {
@@ -620,11 +629,11 @@
     function addTaskRow() {
         const tableBody = document.getElementById('taskTable').getElementsByTagName('tbody')[0];
         const newRow = tableBody.insertRow();
-        const columns = ['summary', 'description', 'epic', 'priority', 'estimate_time', 'story_points', 'start_date', 'due_date', 'notes'];
+        const columns = ['summary', 'description', 'type', 'priority', 'estimate_time', 'story_points', 'start_date', 'notes'];
         
         columns.forEach(colName => {
             const cell = newRow.insertCell();
-            if (colName === 'start_date' || colName === 'due_date') {
+            if (colName === 'start_date') {
                 cell.innerHTML = `<input type="date" class="form-control form-control-sm task-input" name="${colName}[]">`;
             } else if (colName === 'priority') {
                 cell.innerHTML = `
@@ -635,19 +644,18 @@
                         <option value="Low">Low</option>
                         <option value="Lowest">Lowest</option>
                     </select>`;
+            } else if (colName === 'type') {
+                cell.innerHTML = `
+                    <select class="form-select form-select-sm task-input" name="type[]">
+                        <option value="Task" selected>Task</option>
+                        <option value="Epic">Epic</option>
+                        <option value="Story">Story</option>
+                        <option value="Bug">Bug</option>
+                    </select>`;
             } else if (colName === 'description' || colName === 'notes') {
                  cell.innerHTML = `<textarea class="form-control form-control-sm task-textarea" name="${colName}[]" rows="3"></textarea>`;
             } else if (colName === 'estimate_time') {
-                cell.innerHTML = `
-                    <div class="estimate-time-group">
-                        <input type="number" class="form-control form-control-sm estimate-time-input" 
-                               name="estimate_value[]" placeholder="Value" min="0" step="1">
-                        <select class="form-select form-select-sm estimate-time-unit" name="estimate_unit[]">
-                            <option value="m">Minutes</option>
-                            <option value="h" selected>Hours</option>
-                            <option value="d">Days</option>
-                        </select>
-                    </div>`;
+                cell.innerHTML = `<input type="number" step="0.25" min="0" class="form-control form-control-sm task-input" name="${colName}[]" placeholder="Hours">`;
             } else {
                 cell.innerHTML = `<input type="text" class="form-control form-control-sm task-input" name="${colName}[]">`;
             }
@@ -663,10 +671,59 @@
     }
 
     function exportTasksToExcel() {
-        // Placeholder for Excel export functionality
-        alert('Export to Excel functionality to be implemented.');
-        console.log('Exporting tasks for project: ', document.getElementById('addTaskProjectKey').value);
-        // Logic to gather data from the table and convert to Excel
+        // Get the tasks from the table
+        const rows = document.getElementById('taskTable').getElementsByTagName('tbody')[0].rows;
+        const tasks = [];
+        
+        if (rows.length === 0) {
+            alert('No tasks to export. Add some tasks first.');
+            return;
+        }
+        
+        // Use SheetJS (xlsx.js) library to create Excel file
+        const wb = XLSX.utils.book_new();
+        
+        // Prepare data array for Excel
+        const excelData = [];
+        
+        // Add header row
+        excelData.push([
+            'Summary', 'Description', 'Type', 'Priority', 
+            'Estimate Time (h)', 'Story Points', 'Start Date', 
+            'Notes'
+        ]);
+        
+        // Add data rows
+        for (let i = 0; i < rows.length; i++) {
+            const cells = rows[i].cells;
+            
+            // Get values directly from input fields
+            const rowData = [
+                cells[0].querySelector('input, textarea').value, // Summary
+                cells[1].querySelector('input, textarea').value, // Description
+                cells[2].querySelector('select').value,          // Type
+                cells[3].querySelector('select').value,          // Priority
+                cells[4].querySelector('input').value,           // Estimate Time
+                cells[5].querySelector('input').value,           // Story Points
+                cells[6].querySelector('input').value,           // Start Date
+                cells[7].querySelector('input, textarea').value  // Notes
+            ];
+            
+            excelData.push(rowData);
+        }
+        
+        // Create worksheet
+        const ws = XLSX.utils.aoa_to_sheet(excelData);
+        
+        // Add worksheet to workbook
+        XLSX.utils.book_append_sheet(wb, ws, "Tasks");
+        
+        // Generate Excel file
+        const projectKey = document.getElementById('addTaskProjectKey').value;
+        const fileName = `${projectKey}_tasks_export_${new Date().toISOString().slice(0,10)}.xlsx`;
+        
+        // Generate and download the Excel file
+        XLSX.writeFile(wb, fileName);
     }
 
     function createTasksOnJira() {
@@ -692,25 +749,21 @@
                 break;
             }
 
-            // Get estimate time value and unit
-            let estimateTimeValue = '';
-            const estimateValueInput = cells[4].querySelector('input[name="estimate_value[]"]');
-            const estimateUnitSelect = cells[4].querySelector('select[name="estimate_unit[]"]');
+            // Get the task type
+            const taskType = cells[2].querySelector('select').value;
             
-            if (estimateValueInput && estimateUnitSelect && estimateValueInput.value) {
-                estimateTimeValue = estimateValueInput.value + estimateUnitSelect.value;
-            }
-
+            // Get estimate time directly as hours
+            const estimateTime = cells[4].querySelector('input').value;
+            
             const taskData = {
-                summary: summary,
-                description: cells[1].querySelector('input, textarea, select').value,
-                epic: cells[2].querySelector('input, textarea, select').value, // This should be an Epic Key if used for Epic Link
-                priority: cells[3].querySelector('input, textarea, select').value,
-                estimate_time: estimateTimeValue, // Now properly formatted as "2h", "30m", etc.
-                story_points: cells[5].querySelector('input, textarea, select').value,
-                start_date: cells[6].querySelector('input, textarea, select').value, // YYYY-MM-DD
-                due_date: cells[7].querySelector('input, textarea, select').value,     // YYYY-MM-DD
-                notes: cells[8].querySelector('input, textarea, select').value,
+                Summary: summary,
+                Description: cells[1].querySelector('textarea').value,
+                Type: taskType,
+                Priority: cells[3].querySelector('select').value,
+                "Estimate Time (h)": estimateTime,
+                "Story Points": cells[5].querySelector('input').value,
+                "Start Date": cells[6].querySelector('input').value, // YYYY-MM-DD
+                Notes: cells[7].querySelector('textarea').value,
                 // Add fix version if selected
                 fix_version: document.getElementById('versionSelector').value || null,
                 // Add sprint ID if selected
@@ -1156,6 +1209,179 @@
             updateButton.disabled = false;
             updateButton.innerHTML = 'Update Issue';
         });
+    }
+    
+    // Function to import tasks from Excel file
+    function importTasksFromExcel(input) {
+        const file = input.files[0];
+        if (!file) {
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const data = e.target.result;
+                const workbook = XLSX.read(data, { type: 'binary' });
+
+                // Assume the first sheet contains the data
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+                
+                // Convert Excel data to JSON
+                const tasks = XLSX.utils.sheet_to_json(worksheet);
+                
+                if (tasks.length === 0) {
+                    alert('No tasks found in the Excel file.');
+                    return;
+                }
+                
+                // Clear existing task table
+                const taskTableBody = document.getElementById('taskTable').getElementsByTagName('tbody')[0];
+                taskTableBody.innerHTML = '';
+                
+                // Process each task from Excel
+                tasks.forEach(task => {
+                    // Add a new row
+                    const row = taskTableBody.insertRow();
+                    
+                    // Get all the cell inputs we need to fill
+                    const summaryCell = row.insertCell();
+                    summaryCell.innerHTML = '<input type="text" class="form-control form-control-sm task-input" name="summary[]">';
+                    const summaryInput = summaryCell.querySelector('input');
+                    summaryInput.value = task.Summary || '';
+                    
+                    const descriptionCell = row.insertCell();
+                    descriptionCell.innerHTML = '<textarea class="form-control form-control-sm task-textarea" name="description[]" rows="3"></textarea>';
+                    const descriptionInput = descriptionCell.querySelector('textarea');
+                    descriptionInput.value = task.Description || '';
+                    
+                    const typeCell = row.insertCell();
+                    typeCell.innerHTML = `
+                        <select class="form-select form-select-sm task-input" name="type[]">
+                            <option value="Task" selected>Task</option>
+                            <option value="Epic">Epic</option>
+                            <option value="Story">Story</option>
+                            <option value="Bug">Bug</option>
+                        </select>`;
+                    const typeSelect = typeCell.querySelector('select');
+                    if (task.Type) {
+                        typeSelect.value = task.Type;
+                    }
+                    
+                    const priorityCell = row.insertCell();
+                    priorityCell.innerHTML = `
+                        <select class="form-select form-select-sm task-input" name="priority[]">
+                            <option value="Highest">Highest</option>
+                            <option value="High">High</option>
+                            <option value="Medium" selected>Medium</option>
+                            <option value="Low">Low</option>
+                            <option value="Lowest">Lowest</option>
+                        </select>`;
+                    const prioritySelect = priorityCell.querySelector('select');
+                    if (task.Priority) {
+                        prioritySelect.value = task.Priority;
+                    }
+                    
+                    const estimateCell = row.insertCell();
+                    estimateCell.innerHTML = `<input type="number" step="0.25" min="0" class="form-control form-control-sm task-input" name="estimate_time[]" placeholder="Hours">`;
+                    const estimateInput = estimateCell.querySelector('input');
+                    
+                    // Parse estimate time (assuming a float value in hours)
+                    if (task["Estimate Time (h)"]) {
+                        estimateInput.value = parseFloat(task["Estimate Time (h)"]) || '';
+                    }
+                    
+                    const storyPointsCell = row.insertCell();
+                    storyPointsCell.innerHTML = '<input type="text" class="form-control form-control-sm task-input" name="story_points[]">';
+                    const storyPointsInput = storyPointsCell.querySelector('input');
+                    storyPointsInput.value = task["Story Points"] || '';
+                    
+                    const startDateCell = row.insertCell();
+                    startDateCell.innerHTML = '<input type="date" class="form-control form-control-sm task-input" name="start_date[]">';
+                    const startDateInput = startDateCell.querySelector('input');
+                    if (task["Start Date"]) {
+                        // Assuming date format is MM/DD/YYYY or similar Excel date
+                        // Convert to YYYY-MM-DD for date input
+                        const date = parseExcelDate(task["Start Date"]);
+                        if (date) {
+                            startDateInput.value = formatDateForInput(date);
+                        }
+                    }
+                    
+                    const notesCell = row.insertCell();
+                    notesCell.innerHTML = '<textarea class="form-control form-control-sm task-textarea" name="notes[]" rows="3"></textarea>';
+                    const notesInput = notesCell.querySelector('textarea');
+                    notesInput.value = task.Notes || '';
+                    
+                    const actionCell = row.insertCell();
+                    actionCell.innerHTML = '<button type="button" class="btn btn-sm btn-danger" onclick="removeTaskRow(this)"><i class="bi bi-trash"></i></button>';
+                });
+                
+                // Reset the file input
+                input.value = '';
+                
+                alert(`Successfully imported ${tasks.length} tasks from Excel.`);
+            } catch (error) {
+                console.error('Error importing from Excel:', error);
+                alert('Error importing from Excel. Please check the file format.');
+            }
+        };
+        
+        reader.onerror = function() {
+            alert('Error reading the Excel file.');
+        };
+        
+        reader.readAsBinaryString(file);
+    }
+    
+    // Helper function to parse Excel date into JavaScript Date object
+    function parseExcelDate(value) {
+        if (!value) return null;
+        
+        // If it's already a Date object
+        if (value instanceof Date) return value;
+        
+        // If it's a string, try to parse it
+        if (typeof value === 'string') {
+            // First try ISO format (YYYY-MM-DD)
+            if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+                return new Date(value);
+            }
+            
+            // Try other common formats (MM/DD/YYYY or DD/MM/YYYY)
+            const dateComponents = value.split(/[\/\-\.]/);
+            if (dateComponents.length === 3) {
+                // Assume MM/DD/YYYY for simplicity but could be enhanced
+                const month = parseInt(dateComponents[0]) - 1; // JavaScript months are 0-based
+                const day = parseInt(dateComponents[1]);
+                const year = parseInt(dateComponents[2]);
+                return new Date(year, month, day);
+            }
+        }
+        
+        // If it's a number (Excel serial date)
+        if (typeof value === 'number') {
+            const excelDateValue = value;
+            // Excel's date system starts on Jan 1, 1900 (except for a bug with 1900 not being a leap year)
+            // For simplicity, this function works for dates after March 1, 1900
+            const millisecondsPerDay = 24 * 60 * 60 * 1000;
+            const excelEpoch = new Date(1900, 0, 1);
+            return new Date(excelEpoch.getTime() + (excelDateValue - 1) * millisecondsPerDay);
+        }
+        
+        return null; // Unable to parse
+    }
+    
+    // Helper function to format date as YYYY-MM-DD for input[type=date]
+    function formatDateForInput(date) {
+        if (!date) return '';
+        
+        const year = date.getFullYear();
+        const month = (date.getMonth() + 1).toString().padStart(2, '0');
+        const day = date.getDate().toString().padStart(2, '0');
+        
+        return `${year}-${month}-${day}`;
     }
 </script>
 </body>

@@ -9,3 +9,5 @@ jira==3.2.0
 Flask-Cors==3.0.10
 openpyxl==3.0.10
 pathlib==1.0.1
+pandas==1.5.3
+xlsxwriter==3.0.8

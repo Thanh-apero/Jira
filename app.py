@@ -1,11 +1,13 @@
 import os
 import logging
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, jsonify, flash
+from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, send_file
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 from pathlib import Path
 import atexit
+import io
+import pandas as pd
 
 # Import our modules
 from jira_api import JiraAPI
@@ -446,6 +448,147 @@ def update_project_webhook():
     return jsonify({"status": "success", "project": project_key})
 
 
+@app.route('/excel-template', methods=['GET'])
+def get_excel_template():
+    """
+    Generate and return a sample Excel template for task creation
+    """
+    import io
+    import pandas as pd
+    from datetime import datetime, timedelta
+
+    # Create a sample dataframe with template columns
+    today = datetime.now()
+    tomorrow = today + timedelta(days=1)
+    next_week = today + timedelta(days=7)
+
+    # Create sample data
+    sample_data = [
+        {
+            "Summary": "Implement login functionality",
+            "Description": "Create login form with username and password validation",
+            "Type": "Task",
+            "Priority": "High",
+            "Estimate Time (h)": 5,
+            "Story Points": "3",
+            "Start Date": today.strftime("%m/%d/%Y"),
+            "Notes": "Follow security best practices"
+        },
+        {
+            "Summary": "Design database schema",
+            "Description": "Create ERD and define table relationships",
+            "Type": "Epic",
+            "Priority": "Medium",
+            "Estimate Time (h)": 8,
+            "Story Points": "5",
+            "Start Date": today.strftime("%m/%d/%Y"),
+            "Notes": "Consider scaling requirements"
+        },
+        {
+            "Summary": "Fix homepage layout issues",
+            "Description": "Fix responsive design problems on mobile devices",
+            "Type": "Bug",
+            "Priority": "Low",
+            "Estimate Time (h)": 3.5,
+            "Story Points": "2",
+            "Start Date": today.strftime("%m/%d/%Y"),
+            "Notes": "Test on multiple device sizes"
+        }
+    ]
+
+    # Create DataFrame
+    df = pd.DataFrame(sample_data)
+
+    # Add empty row with just headers
+    empty_row = {column: "" for column in df.columns}
+    df = pd.concat([df, pd.DataFrame([empty_row])], ignore_index=True)
+
+    # Create Excel in memory
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name='Tasks', index=False)
+
+        # Get workbook and worksheet objects
+        workbook = writer.book
+        worksheet = writer.sheets['Tasks']
+
+        # Add some formatting
+        header_format = workbook.add_format({
+            'bold': True,
+            'bg_color': '#D9E1F2',
+            'border': 1
+        })
+
+        # Apply header format
+        for col_num, value in enumerate(df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
+
+        # Adjust column widths
+        for i, col in enumerate(df.columns):
+            max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+            worksheet.set_column(i, i, max_len)
+
+        # Add data validation for Type and Priority columns
+        # Find column indexes
+        type_col_idx = df.columns.get_loc("Type")
+        priority_col_idx = df.columns.get_loc("Priority")
+        start_date_col_idx = df.columns.get_loc("Start Date")
+
+        # Add dropdown validation for Type column
+        type_validation = {
+            'validate': 'list',
+            'source': ['Task', 'Epic', 'Story', 'Bug']
+        }
+        worksheet.data_validation(1, type_col_idx, len(df) + 10, type_col_idx, type_validation)
+
+        # Add dropdown validation for Priority column
+        priority_validation = {
+            'validate': 'list',
+            'source': ['Highest', 'High', 'Medium', 'Low', 'Lowest']
+        }
+        worksheet.data_validation(1, priority_col_idx, len(df) + 10, priority_col_idx, priority_validation)
+
+        # Set date format for Start Date column
+        date_format = workbook.add_format({'num_format': 'mm/dd/yyyy'})
+        worksheet.set_column(start_date_col_idx, start_date_col_idx, None, date_format)
+
+        # Add a documentation sheet
+        doc_sheet = workbook.add_worksheet('Instructions')
+        doc_sheet.write(0, 0, 'Task Import Template Instructions', workbook.add_format({'bold': True, 'font_size': 14}))
+        doc_sheet.write(1, 0, 'This template is used to create multiple Jira tasks and epics at once.')
+        doc_sheet.write(3, 0, 'Column Descriptions:', workbook.add_format({'bold': True}))
+
+        instructions = [
+            ['Summary', 'Required. A brief title for the task.'],
+            ['Description', 'Optional. A detailed description of the task.'],
+            ['Type', 'Optional. Select the issue type (Task, Epic, Story, Bug).'],
+            ['Priority', 'Optional. Task priority: Highest, High, Medium, Low, or Lowest.'],
+            ['Estimate Time (h)',
+             'Optional. Time estimation in hours (can include decimals, e.g., 2.5 for 2 hours 30 minutes).'],
+            ['Story Points', 'Optional. Story point value for agile estimations.'],
+            ['Start Date', 'Optional. When work should begin, in MM/DD/YYYY format.'],
+            ['Notes', 'Optional. Any additional notes or comments.']
+        ]
+
+        for i, (col, desc) in enumerate(instructions):
+            doc_sheet.write(4 + i, 0, col, workbook.add_format({'bold': True}))
+            doc_sheet.write(4 + i, 1, desc)
+
+        doc_sheet.set_column(0, 0, 15)
+        doc_sheet.set_column(1, 1, 70)
+
+    # Prepare response
+    output.seek(0)
+
+    # Set headers for Excel download
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name='jira_tasks_template.xlsx'
+    )
+
+
 @app.route('/settings/update', methods=['POST'])
 def update_settings():
     """
@@ -573,10 +716,14 @@ def create_jira_tasks():
 
     for task_detail in tasks_data:
         epic_key_to_link = None
-        epic_name_from_task = task_detail.get("epic")
+        task_type = task_detail.get("Type", "Task")
+        issue_type = task_type  # Use Type directly as the issue type
 
-        if epic_name_from_task:
-            logger.info(f"Processing Epic '{epic_name_from_task}' for task '{task_detail.get('summary')}'.")
+        # Only process Epic linking if this is not an Epic itself and has an epic field
+        if issue_type != "Epic" and task_detail.get("epic"):
+            epic_name_from_task = task_detail.get("epic")
+
+            logger.info(f"Processing Epic '{epic_name_from_task}' for task '{task_detail.get('Summary')}'.")
             try:
                 # Assumption 1: jira_api has a method to find an epic by its name.
                 # This method should return an object with a 'key' or None.
@@ -615,12 +762,12 @@ def create_jira_tasks():
                         results.append({
                             "status": "error_creating_epic",
                             "epic_name_attempted": epic_name_from_task,
-                            "task_summary_related": task_detail.get("summary"),
+                            "task_summary_related": task_detail.get("Summary"),
                             "message": error_message_epic,
                             "details": created_epic_response
                         })
                         logger.error(
-                            f"Failed to create Epic '{epic_name_from_task}' for task '{task_detail.get('summary')}': {error_message_epic}")
+                            f"Failed to create Epic '{epic_name_from_task}' for task '{task_detail.get('Summary')}': {error_message_epic}")
             except AttributeError:
                 logger.error(
                     "`jira_api.find_epic_by_name` method not found. Please implement it to find epics by name.")
@@ -628,7 +775,7 @@ def create_jira_tasks():
                 results.append({
                     "status": "error_finding_epic",
                     "epic_name_attempted": epic_name_from_task,
-                    "task_summary_related": task_detail.get("summary"),
+                    "task_summary_related": task_detail.get("Summary"),
                     "message": "Server misconfiguration: Epic search functionality not available."
                 })
             except Exception as e:
@@ -638,14 +785,14 @@ def create_jira_tasks():
                 results.append({
                     "status": "error_processing_epic",
                     "epic_name_attempted": epic_name_from_task,
-                    "task_summary_related": task_detail.get("summary"),
+                    "task_summary_related": task_detail.get("Summary"),
                     "message": f"Unexpected error processing epic: {str(e)}"
                 })
 
         # Prepare issue_payload for the task, only including specified fields
         issue_payload = {
-            "summary": task_detail.get("summary"),
-            "issuetype": task_detail.get("issuetype", "Task"),  # Default to Task, or get from UI
+            "summary": task_detail.get("Summary"),
+            "issuetype": issue_type,  # Use task_type from the form
         }
 
         if epic_key_to_link:
@@ -653,23 +800,21 @@ def create_jira_tasks():
             # and it expects the Epic's issue KEY.
             issue_payload["epic_link_value"] = epic_key_to_link
 
-        if task_detail.get("priority"):
-            issue_payload["priority"] = task_detail.get("priority")
+        if task_detail.get("Priority"):
+            issue_payload["priority"] = task_detail.get("Priority")
 
         # Map estimate_time to original_estimate for Jira
-        if task_detail.get("estimate_time"):
-            issue_payload["original_estimate"] = task_detail.get("estimate_time")
-
-        if task_detail.get("due_date"):
-            issue_payload["duedate"] = task_detail.get("due_date")
+        if task_detail.get("Estimate Time (h)"):
+            estimate_hours = float(task_detail.get("Estimate Time (h)"))
+            issue_payload["original_estimate"] = f"{estimate_hours}h"  # Format as "5h" for Jira
 
         # Thêm start_date nếu có
-        if task_detail.get("start_date"):
-            issue_payload["start_date"] = task_detail.get("start_date")
+        if task_detail.get("Start Date"):
+            issue_payload["start_date"] = task_detail.get("Start Date")
 
         # Thêm story_points nếu có
-        if task_detail.get("story_points"):
-            issue_payload["story_points"] = task_detail.get("story_points")
+        if task_detail.get("Story Points"):
+            issue_payload["story_points"] = task_detail.get("Story Points")
 
         # Thêm fix_version nếu có
         if task_detail.get("fix_version"):
@@ -679,12 +824,23 @@ def create_jira_tasks():
         if task_detail.get("sprint_id"):
             issue_payload["sprint_id"] = task_detail.get("sprint_id")
 
+        # Add description if available
+        if task_detail.get("Description"):
+            issue_payload["description"] = task_detail.get("Description")
+
+        # Add notes to description if available
+        if task_detail.get("Notes"):
+            if "description" in issue_payload:
+                issue_payload["description"] += f"\n\nNotes:\n{task_detail.get('Notes')}"
+            else:
+                issue_payload["description"] = f"Notes:\n{task_detail.get('Notes')}"
+
         logger.info(f"Creating Jira task for project {project_key} with payload: {issue_payload}")
         result = jira_api.create_issue(project_key, issue_payload)
 
         if result and not result.get("error") and result.get("key"):
             results.append(
-                {"status": "success", "task_summary": task_detail.get("summary"), "issue_key": result.get("key"),
+                {"status": "success", "task_summary": task_detail.get("Summary"), "issue_key": result.get("key"),
                  "linked_epic_key": epic_key_to_link if epic_key_to_link else "N/A"})
         else:
             all_successful = False
@@ -703,13 +859,13 @@ def create_jira_tasks():
                                  "errors": error_details.get("errors", {})}
 
             results.append({"status": "error",
-                            "task_summary": task_detail.get("summary"),
+                            "task_summary": task_detail.get("Summary"),
                             "message": error_message,
                             "details": error_details,
                             "linked_epic_key": epic_key_to_link if epic_key_to_link else "N/A"
                             })
             logger.error(
-                f"Failed to create task '{task_detail.get('summary')}': {error_message}. Details: {error_details}")
+                f"Failed to create task '{task_detail.get('Summary')}': {error_message}. Details: {error_details}")
 
     if all_successful:
         return jsonify({"status": "success", "message": "All tasks created successfully.", "results": results})
