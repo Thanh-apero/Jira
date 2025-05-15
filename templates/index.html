@@ -231,6 +231,12 @@
                                                         <i class="bi bi-discord me-2"></i>Set Discord Webhook
                                                     </a>
                                                 </li>
+                                                <li>
+                                                    <a class="dropdown-item" href="#"
+                                                       onclick="event.stopPropagation(); openProjectStatsModal('{{ project.key }}', '{{ project.name }}');">
+                                                        <i class="bi bi-bar-chart-fill me-2"></i>Project Statistics
+                                                    </a>
+                                                </li>
                                             </ul>
                                         </div>
 
@@ -337,6 +343,164 @@
     <footer class="mt-4 text-center text-muted">
         <p>Jira Discord Notifier &copy; 2025</p>
     </footer>
+</div>
+
+<!-- Project Statistics Modal -->
+<div class="modal fade" id="projectStatsModal" tabindex="-1" aria-labelledby="projectStatsModalLabel"
+     aria-hidden="true">
+    <div class="modal-dialog modal-dialog-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="projectStatsModalLabel">Project Statistics: <span
+                        id="statsProjectName"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="statsProjectKey" value="">
+
+                <!-- Filter Controls -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h6 class="mb-0"><i class="bi bi-funnel-fill me-2"></i>Filters</h6>
+                    </div>
+                    <div class="card-body">
+                        <form id="statsFilterForm" class="row g-3">
+                            <div class="col-md-4">
+                                <label for="statsStartDate" class="form-label">Start Date</label>
+                                <input type="date" class="form-control" id="statsStartDate">
+                            </div>
+                            <div class="col-md-4">
+                                <label for="statsEndDate" class="form-label">End Date</label>
+                                <input type="date" class="form-control" id="statsEndDate">
+                            </div>
+                            <div class="col-md-4">
+                                <label for="statsParticipantFilter" class="form-label">Participant</label>
+                                <select class="form-select" id="statsParticipantFilter">
+                                    <option value="">All Participants</option>
+                                    <!-- Participants will be loaded dynamically -->
+                                </select>
+                            </div>
+                            <div class="col-12 text-end">
+                                <button type="button" class="btn btn-secondary" onclick="resetStatsFilters()">Reset
+                                </button>
+                                <button type="button" class="btn btn-primary" onclick="applyStatsFilters()">Apply
+                                    Filters
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Statistics Overview -->
+                <div class="row" id="statsOverview">
+                    <div class="col-md-4">
+                        <div class="card text-center mb-3">
+                            <div class="card-body">
+                                <h2 class="card-title" id="statsTotalIssues">0</h2>
+                                <p class="card-text">Total Issues</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card text-center mb-3">
+                            <div class="card-body">
+                                <h2 class="card-title" id="statsCompletedTasks">0</h2>
+                                <p class="card-text">Completed Tasks</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card text-center mb-3">
+                            <div class="card-body">
+                                <h2 class="card-title" id="statsReopenedBugs">0</h2>
+                                <p class="card-text">Reopened Bugs</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts Row -->
+                <div class="row mb-4">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h6 class="mb-0">Issues by Status</h6>
+                            </div>
+                            <div class="card-body">
+                                <canvas id="statusChart" height="200"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h6 class="mb-0">Issues by Type</h6>
+                            </div>
+                            <div class="card-body">
+                                <canvas id="typeChart" height="200"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Project Participants -->
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0">Project Participants</h6>
+                        <span class="badge bg-primary" id="totalParticipants">0</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped" id="participantsTable">
+                                <thead>
+                                <tr>
+                                    <th>Participant</th>
+                                    <th>Assigned</th>
+                                    <th>Reported</th>
+                                    <th>Comments</th>
+                                    <th>Total Issues</th>
+                                    <th>Actions</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <!-- Participants will be loaded dynamically -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Issues -->
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">Recent Issues</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped" id="recentIssuesTable">
+                                <thead>
+                                <tr>
+                                    <th>Key</th>
+                                    <th>Summary</th>
+                                    <th>Type</th>
+                                    <th>Status</th>
+                                    <th>Assignee</th>
+                                    <th>Updated</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <!-- Recent issues will be loaded dynamically -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Webhook Modal -->
@@ -538,6 +702,7 @@
 <!-- JavaScript -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
     function toggleProject(projectKey) {
         fetch(`/projects/toggle/${projectKey}`, {
@@ -1149,6 +1314,304 @@
     }
     
     // Update an issue
+    // Project Statistics Modal functions
+    function openProjectStatsModal(projectKey, projectName) {
+        document.getElementById('statsProjectKey').value = projectKey;
+        document.getElementById('statsProjectName').textContent = projectName;
+        
+        // Reset filters
+        resetStatsFilters();
+        
+        // Show the modal
+        const modal = new bootstrap.Modal(document.getElementById('projectStatsModal'));
+        modal.show();
+        
+        // Load project statistics
+        loadProjectStatistics(projectKey);
+    }
+    
+    function resetStatsFilters() {
+        document.getElementById('statsStartDate').value = '';
+        document.getElementById('statsEndDate').value = '';
+        document.getElementById('statsParticipantFilter').innerHTML = '<option value="">All Participants</option>';
+    }
+    
+    function applyStatsFilters() {
+        const projectKey = document.getElementById('statsProjectKey').value;
+        const startDate = document.getElementById('statsStartDate').value;
+        const endDate = document.getElementById('statsEndDate').value;
+        const participant = document.getElementById('statsParticipantFilter').value;
+        
+        loadProjectStatistics(projectKey, startDate, endDate, participant);
+    }
+    
+    // Charts for statistics
+    let statusChart = null;
+    let typeChart = null;
+    
+    function loadProjectStatistics(projectKey, startDate = null, endDate = null, participant = null) {
+        // Show loading state
+        document.getElementById('statsTotalIssues').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        document.getElementById('statsCompletedTasks').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        document.getElementById('statsReopenedBugs').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        document.getElementById('totalParticipants').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        
+        // Clear tables
+        document.getElementById('participantsTable').getElementsByTagName('tbody')[0].innerHTML = 
+            '<tr><td colspan="6" class="text-center">Loading participants...</td></tr>';
+        document.getElementById('recentIssuesTable').getElementsByTagName('tbody')[0].innerHTML = 
+            '<tr><td colspan="6" class="text-center">Loading issues...</td></tr>';
+        
+        // Build URL with query parameters
+        let url = `/api/project-statistics/${projectKey}`;
+        const params = new URLSearchParams();
+        if (startDate) params.append('start_date', startDate);
+        if (endDate) params.append('end_date', endDate);
+        if (participant) params.append('participant', participant);
+        
+        if (params.toString()) {
+            url += `?${params.toString()}`;
+        }
+        
+        // Fetch statistics
+        fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    displayProjectStatistics(data.statistics);
+                    
+                    // Load participants for filter dropdown if not already loaded
+                    if (!participant) {
+                        loadParticipantsForFilter(projectKey, data.statistics.participants);
+                    }
+                } else {
+                    console.error('Error loading project statistics:', data.message);
+                    alert('Failed to load project statistics. Please try again.');
+                }
+            })
+            .catch(error => {
+                console.error('Error loading project statistics:', error);
+                alert('An unexpected error occurred while loading project statistics.');
+            });
+    }
+    
+    function loadParticipantsForFilter(projectKey, participants = null) {
+        const participantFilter = document.getElementById('statsParticipantFilter');
+        participantFilter.innerHTML = '<option value="">All Participants</option>';
+        
+        if (participants) {
+            // Use the participants data already loaded
+            participants.forEach(participant => {
+                const option = document.createElement('option');
+                option.value = participant.key;
+                option.textContent = participant.name;
+                participantFilter.appendChild(option);
+            });
+        } else {
+            // Fetch participants separately if needed
+            fetch(`/api/project-participants/${projectKey}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success' && data.participants && data.participants.length > 0) {
+                        data.participants.forEach(participant => {
+                            const option = document.createElement('option');
+                            option.value = participant.key;
+                            option.textContent = participant.name;
+                            participantFilter.appendChild(option);
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading participants for filter:', error);
+                });
+        }
+    }
+    
+    function displayProjectStatistics(stats) {
+        // Update overview numbers
+        document.getElementById('statsTotalIssues').textContent = stats.total_issues;
+        document.getElementById('statsCompletedTasks').textContent = stats.completed_tasks_count;
+        document.getElementById('statsReopenedBugs').textContent = stats.reopened_bugs_count;
+        document.getElementById('totalParticipants').textContent = stats.total_participants;
+        
+        // Update status chart
+        updateStatusChart(stats.status_counts);
+        
+        // Update type chart
+        updateTypeChart(stats.issue_types);
+        
+        // Update participants table
+        const participantsTableBody = document.getElementById('participantsTable').getElementsByTagName('tbody')[0];
+        participantsTableBody.innerHTML = '';
+        
+        if (stats.participants && stats.participants.length > 0) {
+            stats.participants.forEach(participant => {
+                const row = participantsTableBody.insertRow();
+                
+                // User with avatar
+                const userCell = row.insertCell();
+                userCell.innerHTML = `
+                    <div class="d-flex align-items-center">
+                        <img src="${participant.avatarUrl}" alt="${participant.name}" class="avatar-img me-2">
+                        <span>${participant.name}</span>
+                    </div>
+                `;
+                
+                // Assigned count
+                row.insertCell().textContent = participant.assignedCount;
+                
+                // Reported count
+                row.insertCell().textContent = participant.reportedCount;
+                
+                // Comment count
+                row.insertCell().textContent = participant.commentCount;
+                
+                // Total issues count
+                row.insertCell().textContent = participant.issueCount;
+                
+                // Actions
+                const actionsCell = row.insertCell();
+                actionsCell.innerHTML = `
+                    <button class="btn btn-sm btn-outline-primary" 
+                            onclick="filterByParticipant('${participant.key}', '${participant.name}')" 
+                            title="Filter by this participant">
+                        <i class="bi bi-funnel"></i>
+                    </button>
+                `;
+            });
+        } else {
+            participantsTableBody.innerHTML = '<tr><td colspan="6" class="text-center">No participants found</td></tr>';
+        }
+        
+        // Update recent issues table
+        const recentIssuesTableBody = document.getElementById('recentIssuesTable').getElementsByTagName('tbody')[0];
+        recentIssuesTableBody.innerHTML = '';
+        
+        if (stats.recent_issues && stats.recent_issues.length > 0) {
+            const jiraBaseUrl = document.getElementById('jiraUrlInput')?.value || '';
+            
+            stats.recent_issues.forEach(issue => {
+                const row = recentIssuesTableBody.insertRow();
+                
+                // Key with link
+                const keyCell = row.insertCell();
+                keyCell.innerHTML = `<a href="${jiraBaseUrl}/browse/${issue.key}" target="_blank">${issue.key}</a>`;
+                
+                // Summary
+                row.insertCell().textContent = issue.summary;
+                
+                // Type
+                row.insertCell().textContent = issue.type;
+                
+                // Status
+                row.insertCell().textContent = issue.status;
+                
+                // Assignee
+                row.insertCell().textContent = issue.assignee || 'Unassigned';
+                
+                // Updated date
+                const updatedDate = issue.updated ? new Date(issue.updated).toLocaleString() : '';
+                row.insertCell().textContent = updatedDate;
+            });
+        } else {
+            recentIssuesTableBody.innerHTML = '<tr><td colspan="6" class="text-center">No recent issues found</td></tr>';
+        }
+    }
+    
+    function updateStatusChart(statusCounts) {
+        const ctx = document.getElementById('statusChart').getContext('2d');
+        
+        // Destroy existing chart if it exists
+        if (statusChart) {
+            statusChart.destroy();
+        }
+        
+        // Generate random colors for the status chart
+        const colors = generateRandomColors(Object.keys(statusCounts).length);
+        
+        statusChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: Object.keys(statusCounts),
+                datasets: [{
+                    data: Object.values(statusCounts),
+                    backgroundColor: colors
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        position: 'right'
+                    }
+                }
+            }
+        });
+    }
+    
+    function updateTypeChart(issueTypes) {
+        const ctx = document.getElementById('typeChart').getContext('2d');
+        
+        // Destroy existing chart if it exists
+        if (typeChart) {
+            typeChart.destroy();
+        }
+        
+        // Generate random colors for the type chart
+        const colors = generateRandomColors(Object.keys(issueTypes).length);
+        
+        typeChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: Object.keys(issueTypes),
+                datasets: [{
+                    data: Object.values(issueTypes),
+                    backgroundColor: colors
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        position: 'right'
+                    }
+                }
+            }
+        });
+    }
+    
+    function filterByParticipant(participantKey, participantName) {
+        // Set the participant filter dropdown
+        const participantFilter = document.getElementById('statsParticipantFilter');
+        participantFilter.value = participantKey;
+        
+        // Apply the filters
+        applyStatsFilters();
+    }
+    
+    // Helper function to generate random colors for charts
+    function generateRandomColors(count) {
+        const colors = [];
+        const predefinedColors = [
+            '#4e73df', '#1cc88a', '#36b9cc', '#f6c23e', '#e74a3b', 
+            '#6f42c1', '#fd7e14', '#20c997', '#6c757d', '#17a2b8'
+        ];
+        
+        for (let i = 0; i < count; i++) {
+            if (i < predefinedColors.length) {
+                colors.push(predefinedColors[i]);
+            } else {
+                // Generate random colors if we run out of predefined ones
+                const r = Math.floor(Math.random() * 255);
+                const g = Math.floor(Math.random() * 255);
+                const b = Math.floor(Math.random() * 255);
+                colors.push(`rgba(${r}, ${g}, ${b}, 0.8)`);
+            }
+        }
+        
+        return colors;
+    }
+
     function updateIssue() {
         const issueKey = document.getElementById('editIssueKey').textContent;
         

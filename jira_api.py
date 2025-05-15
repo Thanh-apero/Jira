@@ -850,6 +850,267 @@ class JiraAPI:
             logger.error(f"Error getting project category: {str(e)}")
             return "Unknown"
 
+    def get_project_participants(self, project_key):
+        """
+        Get all participants (users) who have worked on issues in a project
+        """
+        if not self.is_configured():
+            logger.error("Jira API credentials not configured")
+            return []
+
+        cache_key = f"participants_{project_key}"
+
+        # Return from cache if valid
+        if self._is_cache_valid(cache_key) and cache_key in self._projects_cache:
+            logger.info(f"Using cached participants data for project {project_key}")
+            return self._projects_cache[cache_key]
+
+        try:
+            # Get issues from the project to find assignees, reporters and commenters
+            jql = f'project = {project_key} ORDER BY updated DESC'
+            issues = self.search_issues(
+                jql,
+                fields="assignee,reporter,comment",
+                max_results=100,
+                use_cache=False
+            )
+
+            participants = {}
+
+            # Process assignees and reporters
+            for issue in issues:
+                fields = issue.get('fields', {})
+
+                # Process assignee
+                assignee = fields.get('assignee')
+                if assignee and assignee.get('key'):
+                    user_key = assignee.get('key')
+                    if user_key not in participants:
+                        participants[user_key] = {
+                            'key': user_key,
+                            'name': assignee.get('displayName', 'Unknown'),
+                            'avatarUrl': assignee.get('avatarUrls', {}).get('48x48', ''),
+                            'email': assignee.get('emailAddress', ''),
+                            'issueCount': 0,
+                            'assignedCount': 0,
+                            'reportedCount': 0,
+                            'commentCount': 0
+                        }
+                    participants[user_key]['assignedCount'] += 1
+                    participants[user_key]['issueCount'] += 1
+
+                # Process reporter
+                reporter = fields.get('reporter')
+                if reporter and reporter.get('key'):
+                    user_key = reporter.get('key')
+                    if user_key not in participants:
+                        participants[user_key] = {
+                            'key': user_key,
+                            'name': reporter.get('displayName', 'Unknown'),
+                            'avatarUrl': reporter.get('avatarUrls', {}).get('48x48', ''),
+                            'email': reporter.get('emailAddress', ''),
+                            'issueCount': 0,
+                            'assignedCount': 0,
+                            'reportedCount': 0,
+                            'commentCount': 0
+                        }
+                    participants[user_key]['reportedCount'] += 1
+                    participants[user_key]['issueCount'] += 1
+
+                # Process comments
+                comments = fields.get('comment', {}).get('comments', [])
+                for comment in comments:
+                    comment_author = comment.get('author')
+                    if comment_author and comment_author.get('key'):
+                        user_key = comment_author.get('key')
+                        if user_key not in participants:
+                            participants[user_key] = {
+                                'key': user_key,
+                                'name': comment_author.get('displayName', 'Unknown'),
+                                'avatarUrl': comment_author.get('avatarUrls', {}).get('48x48', ''),
+                                'email': comment_author.get('emailAddress', ''),
+                                'issueCount': 0,
+                                'assignedCount': 0,
+                                'reportedCount': 0,
+                                'commentCount': 0
+                            }
+                        participants[user_key]['commentCount'] += 1
+                        participants[user_key]['issueCount'] = max(1, participants[user_key]['issueCount'])
+
+            # Convert dictionary to list and sort by issue count
+            result = list(participants.values())
+            result.sort(key=lambda x: x['issueCount'], reverse=True)
+
+            # Cache the result
+            self._set_cache('projects', cache_key, result, expiry=30 * 60)  # Cache for 30 minutes
+
+            logger.info(f"Found {len(result)} participants in project {project_key}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error getting project participants: {str(e)}")
+            return []
+
+    def get_project_statistics(self, project_key, start_date=None, end_date=None, participant=None):
+        """
+        Get project statistics including issues by status, reopened bugs, and completed tasks.
+        Apply filters based on start_date, end_date, and participant.
+        
+        Args:
+            project_key (str): The project key to get statistics for
+            start_date (str, optional): Filter for issues updated after this date (YYYY-MM-DD)
+            end_date (str, optional): Filter for issues updated before this date (YYYY-MM-DD)
+            participant (str, optional): Filter by participant key
+            
+        Returns:
+            dict: Project statistics
+        """
+        if not self.is_configured():
+            logger.error("Jira API credentials not configured")
+            return {}
+
+        try:
+            # Build base JQL
+            jql_parts = [f"project = {project_key}"]
+
+            # Add date filters if provided
+            if start_date:
+                jql_parts.append(f'updated >= "{start_date}"')
+            if end_date:
+                jql_parts.append(f'updated <= "{end_date}"')
+
+            # Add participant filter if provided
+            if participant:
+                # Filter for issues where the participant is assignee, reporter, or commenter
+                jql_parts.append(
+                    f'(assignee = "{participant}" OR reporter = "{participant}" OR comment ~ "~{participant}")')
+
+            base_jql = " AND ".join(jql_parts)
+
+            # Get issues by status
+            all_issues = self.search_issues(
+                f'{base_jql} ORDER BY updated DESC',
+                fields="key,summary,status,assignee,reporter,issuetype,priority,created,updated,resolutiondate",
+                max_results=200,
+                use_cache=False
+            )
+
+            # Count issues by status
+            status_counts = {}
+            issue_types = {}
+            issue_priorities = {}
+            bugs_count = 0
+            reopened_bugs_count = 0
+            completed_tasks_count = 0
+            recent_issues = []
+
+            # Process issues
+            for issue in all_issues:
+                fields = issue.get('fields', {})
+                status = fields.get('status', {}).get('name', 'Unknown')
+                issue_type = fields.get('issuetype', {}).get('name', 'Unknown')
+                priority = fields.get('priority', {}).get('name', 'Unknown')
+
+                # Count status
+                if status not in status_counts:
+                    status_counts[status] = 0
+                status_counts[status] += 1
+
+                # Count issue types
+                if issue_type not in issue_types:
+                    issue_types[issue_type] = 0
+                issue_types[issue_type] += 1
+
+                # Count priorities
+                if priority not in issue_priorities:
+                    issue_priorities[priority] = 0
+                issue_priorities[priority] += 1
+
+                # Count bugs
+                if 'bug' in issue_type.lower():
+                    bugs_count += 1
+
+                    # Check if bug was reopened
+                    issue_detail = self.get_issue_with_changelog(issue.get('key'))
+                    changelog = issue_detail.get('changelog', {}).get('histories', [])
+
+                    was_reopened = False
+                    for history in changelog:
+                        for item in history.get('items', []):
+                            if item.get('field') == 'status':
+                                from_status = item.get('fromString', '').lower()
+                                to_status = item.get('toString', '').lower()
+
+                                if (from_status in ['done', 'review', 'resolved', 'closed'] and
+                                        to_status in ['to do', 'todo', 'in progress', 'open']):
+                                    was_reopened = True
+                                    break
+                        if was_reopened:
+                            break
+
+                    if was_reopened:
+                        reopened_bugs_count += 1
+
+                # Count completed tasks
+                if status.lower() in ['done', 'closed', 'resolved', 'complete', 'completed']:
+                    completed_tasks_count += 1
+
+                # Add to recent issues (limited to 10)
+                if len(recent_issues) < 10:
+                    recent_issues.append({
+                        'key': issue.get('key'),
+                        'summary': fields.get('summary', 'No summary'),
+                        'status': status,
+                        'type': issue_type,
+                        'priority': priority,
+                        'assignee': fields.get('assignee', {}).get('displayName', 'Unassigned'),
+                        'updated': fields.get('updated'),
+                        'created': fields.get('created')
+                    })
+
+            # Get participants
+            participants = self.get_project_participants(project_key)
+
+            # Prepare result
+            result = {
+                'project_key': project_key,
+                'total_issues': len(all_issues),
+                'status_counts': status_counts,
+                'issue_types': issue_types,
+                'issue_priorities': issue_priorities,
+                'bugs_count': bugs_count,
+                'reopened_bugs_count': reopened_bugs_count,
+                'completed_tasks_count': completed_tasks_count,
+                'recent_issues': recent_issues,
+                'participants': participants[:10],  # Limit to top 10 participants
+                'total_participants': len(participants),
+                'filters': {
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'participant': participant
+                }
+            }
+
+            logger.info(f"Generated statistics for project {project_key}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error getting project statistics: {str(e)}")
+            return {
+                'error': str(e),
+                'project_key': project_key,
+                'total_issues': 0,
+                'status_counts': {},
+                'issue_types': {},
+                'issue_priorities': {},
+                'bugs_count': 0,
+                'reopened_bugs_count': 0,
+                'completed_tasks_count': 0,
+                'recent_issues': [],
+                'participants': [],
+                'total_participants': 0
+            }
+
     def search_issues(self, jql, fields=None, max_results=50, expand=None, use_cache=True, expiry=None):
         """Search for issues using JQL"""
         cache_key = f"jql_{jql}_{fields}_{max_results}_{expand}"

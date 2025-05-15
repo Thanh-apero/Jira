@@ -995,6 +995,48 @@ def get_issue_details(issue_key):
     })
 
 
+@app.route('/api/project-statistics/<project_key>', methods=['GET'])
+def get_project_statistics(project_key):
+    """
+    Get project statistics including participants, issues by status, and bugs
+    """
+    if not jira_api.is_configured():
+        return jsonify({"status": "error", "message": "Jira API not configured"}), 500
+
+    # Get query parameters for filtering
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    participant = request.args.get('participant')
+
+    # Get project statistics from Jira API
+    statistics = jira_api.get_project_statistics(
+        project_key,
+        start_date=start_date,
+        end_date=end_date,
+        participant=participant
+    )
+
+    return jsonify({
+        "status": "success",
+        "statistics": statistics
+    })
+
+
+@app.route('/api/project-participants/<project_key>', methods=['GET'])
+def get_project_participants(project_key):
+    """
+    Get all participants (users who have created, commented on, or been assigned to issues) in a project
+    """
+    if not jira_api.is_configured():
+        return jsonify({"status": "error", "message": "Jira API not configured"}), 500
+
+    participants = jira_api.get_project_participants(project_key)
+    return jsonify({
+        "status": "success",
+        "participants": participants
+    })
+
+
 @app.route('/api/issues/<issue_key>', methods=['PUT'])
 def update_issue(issue_key):
     """
