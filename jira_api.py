@@ -443,514 +443,6 @@ class JiraAPI:
             logger.error(f"Error adding issue to sprint: {str(e)}")
             return False
 
-    def create_issue(self, project_key, issue_data):
-        """
-        Create a new issue in Jira.
-        Args:
-            project_key (str): The key of the project.
-            issue_data (dict): Dictionary with issue details. Expected keys:
-                summary (str): Issue summary.
-                issuetype (str): Type of issue (e.g., "Task", "Bug", "Epic"). Defaults to "Task".
-                priority (str, optional): Name of the priority.
-                duedate (str, optional): Due date "YYYY-MM-DD".
-                epic (str, optional): Name of the Epic to link or create.
-                original_estimate (str, optional): Original estimate (e.g., "2h", "1d").
-                start_date (str, optional): Start date "YYYY-MM-DD".
-                story_points (float, optional): Story points.
-                fix_version (str, optional): Fix version ID.
-                sprint_id (str, optional): Sprint ID to add the issue to after creation.
-        Returns:
-            dict: Jira API response or error dict.
-        """
-        if not self.is_configured():
-            logger.error("Jira API credentials not configured. Cannot create issue.")
-            return {"error": True, "message": "Jira API credentials not configured."}
-
-        url = f"{self.jira_url}/rest/api/2/issue"
-        issue_type_name = issue_data.get("issuetype", "Task")
-
-        fields = {
-            "project": {"key": project_key},
-            "summary": issue_data.get("summary", f"New {issue_type_name}"),
-            "issuetype": {"name": issue_type_name}
-        }
-
-        if issue_data.get("priority"):
-            fields["priority"] = {"name": issue_data.get("priority")}
-        if issue_data.get("duedate"):
-            fields["duedate"] = issue_data.get("duedate")
-        if issue_data.get("original_estimate"):
-            # Jira's time tracking format might be specific, e.g., "1w 2d 3h 45m"
-            # Or it might take seconds. Assuming direct string for now.
-            fields["timetracking"] = {"originalEstimate": issue_data.get("original_estimate")}
-
-        if issue_data.get("start_date"):
-            fields["customfield_10015"] = issue_data.get("start_date")
-
-        # Special handling for Epic creation or linking
-        if issue_type_name.lower() == 'epic':
-            # Instead of trying to set customfield_10150 directly, which is causing errors,
-            # just use the summary field for the Epic name. This is a common pattern.
-            # The Epic Name field is usually auto-populated from summary if not specified.
-            # No special handling needed for Epic name in this Jira instance
-            pass
-
-        # Handle fixVersion if specified
-        if issue_data.get("fix_version"):
-            fix_version_id = issue_data.get("fix_version")
-            fields["fixVersions"] = [{"id": fix_version_id}]
-
-        # If linking to an Epic (app.py passes epic_link_value)
-        elif issue_data.get("epic_link_value"):  # This key comes from app.py
-            epic_link_field_id = self.get_field_id_by_name("Epic Link")
-            if epic_link_field_id:
-                # Check if this field is available on the screen before adding it
-                try:
-                    # Make a minimal test API call to validate if we can set this field
-                    test_response = requests.get(
-                        f"{self.jira_url}/rest/api/2/field/{epic_link_field_id}",
-                        auth=self.auth
-                    )
-                    if test_response.status_code == 200:
-                        fields[epic_link_field_id] = issue_data["epic_link_value"]  # Expects Epic Key
-                    else:
-                        logger.warning(
-                            f"Epic Link field {epic_link_field_id} is not accessible. Task will not be linked to Epic.")
-                except Exception as e:
-                    logger.warning(f"Error checking Epic Link field: {str(e)}. Task will not be linked to Epic.")
-            else:
-                logger.warning("Could not find 'Epic Link' field ID. Task will not be linked to Epic.")
-
-        payload = {"fields": fields}
-
-        try:
-            logger.info(f"Attempting to create issue in project {project_key} with payload: {json.dumps(payload)}")
-            response = requests.post(
-                url,
-                json=payload,
-                auth=self.auth,
-                headers={"Content-Type": "application/json"}
-            )
-
-            if response.status_code == 201:  # 201 Created
-                created_issue = response.json()
-                issue_key = created_issue.get('key')
-                logger.info(f"Successfully created issue {issue_key} in project {project_key}")
-
-                # If sprint_id is provided, add the issue to that sprint
-                if issue_data.get("sprint_id"):
-                    sprint_id = issue_data.get("sprint_id")
-                    sprint_result = self.add_issue_to_sprint(sprint_id, issue_key)
-                    if not sprint_result:
-                        logger.warning(f"Failed to add issue {issue_key} to sprint {sprint_id}")
-
-                return {"key": issue_key, "id": created_issue.get('id'),
-                        "self": created_issue.get('self'), "error": False}
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network/Request error creating issue in {project_key}: {str(e)}")
-            return {"error": True, "message": f"RequestException: {str(e)}"}
-        except Exception as e:  # Catch any other unexpected errors
-            logger.error(f"An unexpected error occurred while creating issue in {project_key}: {str(e)}")
-            return {"error": True, "message": f"Unexpected error: {str(e)}"}
-
-    def update_issue(self, issue_key, update_data):
-        """
-        Update an existing issue in Jira.
-        Args:
-            issue_key (str): The key of the issue to update (e.g., 'PROJECT-123').
-            update_data (dict): Dictionary with updated issue details. Same fields as create_issue.
-        Returns:
-            dict: Status of the update operation.
-        """
-        if not self.is_configured():
-            logger.error("Jira API credentials not configured. Cannot update issue.")
-            return {"error": True, "message": "Jira API credentials not configured."}
-
-        url = f"{self.jira_url}/rest/api/2/issue/{issue_key}"
-
-        # Prepare fields to update
-        fields = {}
-
-        # Basic fields
-        if update_data.get("summary"):
-            fields["summary"] = update_data.get("summary")
-
-        if update_data.get("description"):
-            fields["description"] = update_data.get("description")
-
-        if update_data.get("priority"):
-            fields["priority"] = {"name": update_data.get("priority")}
-
-        if update_data.get("duedate"):
-            fields["duedate"] = update_data.get("duedate")
-
-        if update_data.get("original_estimate"):
-            fields["timetracking"] = {"originalEstimate": update_data.get("original_estimate")}
-
-        if update_data.get("start_date"):
-            fields["customfield_10015"] = update_data.get("start_date")
-
-        if update_data.get("fix_version"):
-            fields["fixVersions"] = [{"id": update_data.get("fix_version")}]
-
-        # Only proceed if we have fields to update
-        if not fields:
-            logger.warning(f"No fields to update for issue {issue_key}")
-            return {"error": True, "message": "No fields specified to update."}
-
-        payload = {"fields": fields}
-
-        try:
-            logger.info(f"Attempting to update issue {issue_key} with payload: {json.dumps(payload)}")
-            response = requests.put(
-                url,
-                json=payload,
-                auth=self.auth,
-                headers={"Content-Type": "application/json"}
-            )
-
-            if response.status_code == 204:  # 204 No Content is success for updates
-                logger.info(f"Successfully updated issue {issue_key}")
-
-                # Handle sprint update - needs separate call
-                if update_data.get("sprint_id"):
-                    sprint_id = update_data.get("sprint_id")
-                    sprint_result = self.add_issue_to_sprint(sprint_id, issue_key)
-                    if not sprint_result:
-                        logger.warning(f"Failed to add issue {issue_key} to sprint {sprint_id}")
-
-                return {"error": False, "message": f"Issue {issue_key} updated successfully"}
-            else:
-                logger.error(
-                    f"Failed to update issue {issue_key}. Status: {response.status_code}, Response: {response.text}")
-                try:
-                    error_details = response.json()
-                    return {"error": True, "status_code": response.status_code, "message": error_details}
-                except:
-                    return {"error": True, "status_code": response.status_code, "message": response.text}
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network/Request error updating issue {issue_key}: {str(e)}")
-            return {"error": True, "message": f"RequestException: {str(e)}"}
-        except Exception as e:
-            logger.error(f"An unexpected error occurred while updating issue {issue_key}: {str(e)}")
-            return {"error": True, "message": f"Unexpected error: {str(e)}"}
-
-    def get_issue_details(self, issue_key):
-        """Get detailed information about a specific issue"""
-        if not self.is_configured():
-            logger.error("Jira API credentials not configured")
-            return None
-
-        try:
-            logger.info(f"Fetching details for issue {issue_key}")
-            response = requests.get(
-                f"{self.jira_url}/rest/api/2/issue/{issue_key}",
-                params={
-                    "fields": "summary,description,issuetype,priority,status,assignee,duedate,fixVersions,project,sprint,customfield_10015"},
-                auth=self.auth
-            )
-
-            if response.status_code == 200:
-                issue = response.json()
-                logger.info(f"Successfully retrieved details for issue {issue_key}")
-                return issue
-            else:
-                logger.error(f"Failed to fetch issue {issue_key}: {response.status_code} - {response.text}")
-                return None
-        except Exception as e:
-            logger.error(f"Error getting issue details for {issue_key}: {str(e)}")
-            return None
-
-    def get_issues_in_active_sprints(self, project_keys, status_filter=None):
-        """
-        Get issues from active sprints in the specified projects
-        
-        Args:
-            project_keys (list): List of project keys to check
-            status_filter (list, optional): List of statuses to include (e.g. ["To Do", "In Progress"])
-        """
-        if not project_keys:
-            return []
-
-        all_issues = []
-
-        for project_key in project_keys:
-            active_sprints = self.get_active_sprints(project_key)
-
-            for sprint in active_sprints:
-                sprint_id = sprint.get('id')
-
-                # Build JQL query
-                jql_parts = [f"sprint = {sprint_id}"]
-
-                if status_filter:
-                    status_clause = " OR ".join([f'status = "{status}"' for status in status_filter])
-                    jql_parts.append(f"({status_clause})")
-
-                jql = " AND ".join(jql_parts)
-
-                # Get issues in this sprint
-                issues = self.search_issues(
-                    jql,
-                    fields="key,summary,issuetype,assignee,status,priority,created,updated,project",
-                    max_results=100,  # Increased limit to get more issues
-                    use_cache=False  # Don't cache as sprint contents change frequently
-                )
-
-                all_issues.extend(issues)
-
-        return all_issues
-
-    def find_reopened_bugs(self, project_keys):
-        """Find reopened bugs in the specified projects"""
-        if not project_keys:
-            return []
-
-        logger.info(f"Searching for reopened bugs in projects: {', '.join(project_keys)}")
-
-        # Get all available issue types
-        issue_types = self.get_issue_types()
-
-        # Filter for issue types that might represent bugs - look for names containing "bug" or similar terms
-        bug_issue_types = [it['name'] for it in issue_types if
-                           any(term in it['name'].lower() for term in ['bug', 'defect', 'error', 'issue', 'problem'])]
-
-        if not bug_issue_types:
-            # If no bug-like issue types found, just use "Task" as fallback
-            bug_issue_types = ["Task"]
-            logger.warning(f"No bug-like issue types found. Using Task as fallback.")
-
-        logger.info(f"Using issue types for bugs: {bug_issue_types}")
-
-        # Create JQL to find bugs
-        if len(bug_issue_types) == 1:
-            issuetype_clause = f"issuetype = \"{bug_issue_types[0]}\""
-        else:
-            issuetype_clause = "issuetype IN (" + ", ".join([f'"{bt}"' for bt in bug_issue_types]) + ")"
-
-        bug_jql = f"{issuetype_clause} AND status in ('To Do', 'In Progress', 'Todo', 'Open') AND project in ({','.join(project_keys)})"
-
-        bugs = self.search_issues(
-            bug_jql,
-            fields="key,summary,issuetype,assignee,status,priority,created,updated,project",
-            max_results=100
-        )
-
-        logger.info(f"Found {len(bugs)} active bugs to check for reopen status")
-
-        reopened_bugs = []
-
-        for bug in bugs:
-            issue_key = bug.get('key')
-
-            # Skip if already notified
-            if self.was_issue_notified('bugs', issue_key):
-                continue
-
-            # Get changelog to check for reopen
-            issue_detail = self.get_issue_with_changelog(issue_key)
-            changelog = issue_detail.get('changelog', {}).get('histories', [])
-
-            # Check if bug was reopened
-            was_reopened = False
-            reopen_details = None
-
-            for history in changelog:
-                for item in history.get('items', []):
-                    if item.get('field') == 'status':
-                        from_status = item.get('fromString', '').lower()
-                        to_status = item.get('toString', '').lower()
-
-                        # If moved from Done/Review/Resolved/Closed to Todo/In Progress
-                        if (from_status in ['done', 'review', 'resolved', 'closed'] and
-                                to_status in ['to do', 'todo', 'in progress', 'open']):
-                            was_reopened = True
-                            reopen_details = {
-                                'from': from_status,
-                                'to': to_status,
-                                'by': history.get('author', {}).get('displayName', 'Unknown'),
-                                'when': history.get('created', 'Unknown time')
-                            }
-                            break
-
-                if was_reopened:
-                    break
-
-            if was_reopened:
-                logger.info(
-                    f"Found reopened bug {issue_key}: '{issue_detail.get('fields', {}).get('summary', 'No summary')}'")
-
-                # Add reopen details to the issue for the notification
-                issue_detail['reopen_details'] = reopen_details
-                reopened_bugs.append(issue_detail)
-
-        logger.info(f"Found {len(reopened_bugs)} reopened bugs that need notification")
-        return reopened_bugs
-
-    def get_issue_with_changelog(self, issue_key):
-        """Get issue details with changelog"""
-        try:
-            response = requests.get(
-                f"{self.jira_url}/rest/api/2/issue/{issue_key}",
-                params={"expand": "changelog"},
-                auth=self.auth
-            )
-
-            if response.status_code == 200:
-                return response.json()
-            else:
-                logger.error(f"Failed to get issue {issue_key}: {response.status_code}")
-                return {}
-        except Exception as e:
-            logger.error(f"Error getting issue {issue_key}: {str(e)}")
-            return {}
-
-    def get_project_category(self, project_id):
-        """
-        Get project category from Jira
-        This is now only used as a fallback - the main categorization is done in get_all_projects
-        """
-        if not self.is_configured():
-            return "Unknown"
-
-        try:
-            response = requests.get(
-                f"{self.jira_url}/rest/api/2/project/{project_id}",
-                auth=self.auth
-            )
-
-            if response.status_code == 200:
-                project_data = response.json()
-                # Try to get category from project data
-                if 'projectCategory' in project_data and project_data['projectCategory']:
-                    return project_data['projectCategory'].get('name', 'General')
-                else:
-                    # Check for custom field or naming convention that might indicate category
-                    key = project_data.get('key', '')
-                    # Check naming patterns
-                    if key.startswith('BE') or key.startswith('BACKEND'):
-                        return 'Backend'
-                    elif key.startswith('FE') or key.startswith('FRONTEND'):
-                        return 'Frontend'
-                    elif key.startswith('MOB') or key.startswith('MOBILE'):
-                        return 'Mobile'
-                    elif key.startswith('AIP'):
-                        return 'Software'
-                    elif key.startswith('AAIP'):
-                        return 'AI Products'
-                    else:
-                        # Default category based on URL pattern
-                        if '/software/' in self.jira_url:
-                            return 'Software'
-                        else:
-                            return 'General'
-            else:
-                return "Unknown"
-        except Exception as e:
-            logger.error(f"Error getting project category: {str(e)}")
-            return "Unknown"
-
-    def get_project_participants(self, project_key):
-        """
-        Get all participants (users) who have worked on issues in a project
-        """
-        if not self.is_configured():
-            logger.error("Jira API credentials not configured")
-            return []
-
-        cache_key = f"participants_{project_key}"
-
-        # Return from cache if valid
-        if self._is_cache_valid(cache_key) and cache_key in self._projects_cache:
-            logger.info(f"Using cached participants data for project {project_key}")
-            return self._projects_cache[cache_key]
-
-        try:
-            # Get issues from the project to find assignees, reporters and commenters
-            jql = f'project = {project_key} ORDER BY updated DESC'
-            issues = self.search_issues(
-                jql,
-                fields="assignee,reporter,comment",
-                max_results=100,
-                use_cache=False
-            )
-
-            participants = {}
-
-            # Process assignees and reporters
-            for issue in issues:
-                fields = issue.get('fields', {})
-
-                # Process assignee
-                assignee = fields.get('assignee')
-                if assignee and assignee.get('key'):
-                    user_key = assignee.get('key')
-                    if user_key not in participants:
-                        participants[user_key] = {
-                            'key': user_key,
-                            'name': assignee.get('displayName', 'Unknown'),
-                            'avatarUrl': assignee.get('avatarUrls', {}).get('48x48', ''),
-                            'email': assignee.get('emailAddress', ''),
-                            'issueCount': 0,
-                            'assignedCount': 0,
-                            'reportedCount': 0,
-                            'commentCount': 0
-                        }
-                    participants[user_key]['assignedCount'] += 1
-                    participants[user_key]['issueCount'] += 1
-
-                # Process reporter
-                reporter = fields.get('reporter')
-                if reporter and reporter.get('key'):
-                    user_key = reporter.get('key')
-                    if user_key not in participants:
-                        participants[user_key] = {
-                            'key': user_key,
-                            'name': reporter.get('displayName', 'Unknown'),
-                            'avatarUrl': reporter.get('avatarUrls', {}).get('48x48', ''),
-                            'email': reporter.get('emailAddress', ''),
-                            'issueCount': 0,
-                            'assignedCount': 0,
-                            'reportedCount': 0,
-                            'commentCount': 0
-                        }
-                    participants[user_key]['reportedCount'] += 1
-                    participants[user_key]['issueCount'] += 1
-
-                # Process comments
-                comments = fields.get('comment', {}).get('comments', [])
-                for comment in comments:
-                    comment_author = comment.get('author')
-                    if comment_author and comment_author.get('key'):
-                        user_key = comment_author.get('key')
-                        if user_key not in participants:
-                            participants[user_key] = {
-                                'key': user_key,
-                                'name': comment_author.get('displayName', 'Unknown'),
-                                'avatarUrl': comment_author.get('avatarUrls', {}).get('48x48', ''),
-                                'email': comment_author.get('emailAddress', ''),
-                                'issueCount': 0,
-                                'assignedCount': 0,
-                                'reportedCount': 0,
-                                'commentCount': 0
-                            }
-                        participants[user_key]['commentCount'] += 1
-                        participants[user_key]['issueCount'] = max(1, participants[user_key]['issueCount'])
-
-            # Convert dictionary to list and sort by issue count
-            result = list(participants.values())
-            result.sort(key=lambda x: x['issueCount'], reverse=True)
-
-            # Cache the result
-            self._set_cache('projects', cache_key, result, expiry=30 * 60)  # Cache for 30 minutes
-
-            logger.info(f"Found {len(result)} participants in project {project_key}")
-            return result
-
-        except Exception as e:
-            logger.error(f"Error getting project participants: {str(e)}")
-            return []
-
     def get_project_statistics(self, project_key, start_date=None, end_date=None, participant=None):
         """
         Get project statistics including issues by status, reopened bugs, and completed tasks.
@@ -991,7 +483,7 @@ class JiraAPI:
             all_issues = self.search_issues(
                 f'{base_jql} ORDER BY updated DESC',
                 fields="key,summary,status,assignee,reporter,issuetype,priority,created,updated,resolutiondate",
-                max_results=200,
+                max_results=500,  # Increased from 200 to get more issues
                 use_cache=False
             )
 
@@ -1000,11 +492,10 @@ class JiraAPI:
             issue_types = {}
             issue_priorities = {}
             bugs_count = 0
-            reopened_bugs_count = 0
             completed_tasks_count = 0
             recent_issues = []
-
-            # Process issues
+            
+            # Process issues for basic statistics
             for issue in all_issues:
                 fields = issue.get('fields', {})
                 status = fields.get('status', {}).get('name', 'Unknown')
@@ -1030,27 +521,6 @@ class JiraAPI:
                 if 'bug' in issue_type.lower():
                     bugs_count += 1
 
-                    # Check if bug was reopened
-                    issue_detail = self.get_issue_with_changelog(issue.get('key'))
-                    changelog = issue_detail.get('changelog', {}).get('histories', [])
-
-                    was_reopened = False
-                    for history in changelog:
-                        for item in history.get('items', []):
-                            if item.get('field') == 'status':
-                                from_status = item.get('fromString', '').lower()
-                                to_status = item.get('toString', '').lower()
-
-                                if (from_status in ['done', 'review', 'resolved', 'closed'] and
-                                        to_status in ['to do', 'todo', 'in progress', 'open']):
-                                    was_reopened = True
-                                    break
-                        if was_reopened:
-                            break
-
-                    if was_reopened:
-                        reopened_bugs_count += 1
-
                 # Count completed tasks
                 if status.lower() in ['done', 'closed', 'resolved', 'complete', 'completed']:
                     completed_tasks_count += 1
@@ -1067,7 +537,16 @@ class JiraAPI:
                         'updated': fields.get('updated'),
                         'created': fields.get('created')
                     })
-
+            
+            # Use the new method to find reopened bugs
+            reopened_bugs = self.find_reopened_bugs_by_jql(
+                project_key, 
+                start_date=start_date,
+                end_date=end_date,
+                participant=participant
+            )
+            reopened_bugs_count = len(reopened_bugs)
+            
             # Get participants
             participants = self.get_project_participants(project_key)
 
@@ -1091,7 +570,10 @@ class JiraAPI:
                 }
             }
 
-            logger.info(f"Generated statistics for project {project_key}")
+            logger.info(f"Generated statistics for project {project_key}: {bugs_count} bugs, {reopened_bugs_count} reopened bugs")
+            # Thêm thông tin chi tiết về bug reopen 
+            if reopened_bugs_count > 0:
+                logger.info(f"Reopened bugs in {project_key}: {', '.join([bug.get('key') for bug in reopened_bugs])}")
             return result
 
         except Exception as e:
@@ -1335,173 +817,23 @@ class JiraAPI:
         return [issue for issue in all_issues
                 if not self.was_issue_notified('issues', issue.get('key'))]
 
-    def create_issue(self, project_key, issue_data):
-        """
-        Create a new issue in Jira.
-        Args:
-            project_key (str): The key of the project.
-            issue_data (dict): Dictionary with issue details. Expected keys:
-                summary (str): Issue summary.
-                issuetype (str): Type of issue (e.g., "Task", "Bug", "Epic"). Defaults to "Task".
-                priority (str, optional): Name of the priority.
-                duedate (str, optional): Due date "YYYY-MM-DD".
-                epic (str, optional): Name of the Epic to link or create.
-                original_estimate (str, optional): Original estimate (e.g., "2h", "1d").
-                start_date (str, optional): Start date "YYYY-MM-DD".
-                story_points (float, optional): Story points.
-                fix_version (str, optional): Fix version ID.
-        Returns:
-            dict: Jira API response or error dict.
-        """
-        if not self.is_configured():
-            logger.error("Jira API credentials not configured. Cannot create issue.")
-            return {"error": True, "message": "Jira API credentials not configured."}
-
-        url = f"{self.jira_url}/rest/api/2/issue"
-        issue_type_name = issue_data.get("issuetype", "Task")
-
-        fields = {
-            "project": {"key": project_key},
-            "summary": issue_data.get("summary", f"New {issue_type_name}"),
-            "issuetype": {"name": issue_type_name}
-        }
-
-        if issue_data.get("priority"):
-            fields["priority"] = {"name": issue_data.get("priority")}
-        if issue_data.get("duedate"):
-            fields["duedate"] = issue_data.get("duedate")
-        if issue_data.get("original_estimate"):
-            # Jira's time tracking format might be specific, e.g., "1w 2d 3h 45m"
-            # Or it might take seconds. Assuming direct string for now.
-            fields["timetracking"] = {"originalEstimate": issue_data.get("original_estimate")}
-
-        if issue_data.get("start_date"):
-            fields["customfield_10015"] = issue_data.get("start_date")
-
-        # Special handling for Epic creation or linking
-        if issue_type_name.lower() == 'epic':
-            # Instead of trying to set customfield_10150 directly, which is causing errors,
-            # just use the summary field for the Epic name. This is a common pattern.
-            # The Epic Name field is usually auto-populated from summary if not specified.
-            # No special handling needed for Epic name in this Jira instance
-            pass
-
-        # Handle fixVersion if specified
-        if issue_data.get("fix_version"):
-            fix_version_id = issue_data.get("fix_version")
-            fields["fixVersions"] = [{"id": fix_version_id}]
-
-        # If linking to an Epic (app.py passes epic_link_value)
-        elif issue_data.get("epic_link_value"):  # This key comes from app.py
-            epic_link_field_id = self.get_field_id_by_name("Epic Link")
-            if epic_link_field_id:
-                # Check if this field is available on the screen before adding it
-                try:
-                    # Make a minimal test API call to validate if we can set this field
-                    test_response = requests.get(
-                        f"{self.jira_url}/rest/api/2/field/{epic_link_field_id}",
-                        auth=self.auth
-                    )
-                    if test_response.status_code == 200:
-                        fields[epic_link_field_id] = issue_data["epic_link_value"]  # Expects Epic Key
-                    else:
-                        logger.warning(
-                            f"Epic Link field {epic_link_field_id} is not accessible. Task will not be linked to Epic.")
-                except Exception as e:
-                    logger.warning(f"Error checking Epic Link field: {str(e)}. Task will not be linked to Epic.")
-            else:
-                logger.warning("Could not find 'Epic Link' field ID. Task will not be linked to Epic.")
-
-        payload = {"fields": fields}
-
+    def get_issue_with_changelog(self, issue_key):
+        """Get issue details with changelog"""
         try:
-            logger.info(f"Attempting to create issue in project {project_key} with payload: {json.dumps(payload)}")
-            response = requests.post(
-                url,
-                json=payload,
-                auth=self.auth,
-                headers={"Content-Type": "application/json"}
-            )
-
-            if response.status_code == 201:  # 201 Created
-                created_issue = response.json()
-                logger.info(f"Successfully created issue {created_issue.get('key')} in project {project_key}")
-                return {"key": created_issue.get('key'), "id": created_issue.get('id'),
-                        "self": created_issue.get('self'), "error": False}
-            else:
-                logger.error(
-                    f"Failed to create issue in {project_key}. Status: {response.status_code}, Response: {response.text}")
-                try:
-                    error_details = response.json()
-                    # Log the failing payload for easier debugging
-                    logger.error(f"Failing payload for {project_key}: {json.dumps(payload)}")
-                    logger.error(f"Error details from Jira: {error_details}")
-                    return {"error": True, "status_code": response.status_code, "message": error_details,
-                            "payload_sent": payload}
-                except ValueError:
-                    return {"error": True, "status_code": response.status_code, "message": response.text,
-                            "payload_sent": payload}
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network/Request error creating issue in {project_key}: {str(e)}")
-            return {"error": True, "message": f"RequestException: {str(e)}"}
-        except Exception as e:  # Catch any other unexpected errors
-            logger.error(f"An unexpected error occurred while creating issue in {project_key}: {str(e)}")
-            return {"error": True, "message": f"Unexpected error: {str(e)}"}
-
-    def search_issues(self, jql, fields=None, max_results=50, expand=None, use_cache=True, expiry=None):
-        """Search for issues using JQL"""
-        cache_key = f"jql_{jql}_{fields}_{max_results}_{expand}"
-
-        # Return from cache if valid and not for time-sensitive queries
-        if use_cache and not ('updated >=' in jql or 'created >=' in jql) and self._is_cache_valid(
-                cache_key) and cache_key in self._issues_cache:
-            logger.info(f"Using cached issues data for query {jql[:30]}...")
-            return self._issues_cache[cache_key]
-
-        if not self.is_configured():
-            logger.error("Jira API credentials not configured")
-            return []
-
-        if fields is None:
-            fields = "key,summary,issuetype,creator,priority,created,project,status,comment,duedate,assignee"
-
-        try:
-            logger.info(f"Searching issues with JQL: {jql[:50]}...")
-            params = {
-                "jql": jql,
-                "fields": fields,
-                "maxResults": max_results
-            }
-
-            if expand:
-                params["expand"] = expand
-
             response = requests.get(
-                f"{self.jira_url}/rest/api/2/search",
-                params=params,
+                f"{self.jira_url}/rest/api/2/issue/{issue_key}",
+                params={"expand": "changelog"},
                 auth=self.auth
             )
 
             if response.status_code == 200:
-                result = response.json().get('issues', [])
-                # Only cache if not a time-sensitive query
-                if use_cache and not ('updated >=' in jql or 'created >=' in jql):
-                    self._set_cache('issues', cache_key, result, expiry)
-                return result
+                return response.json()
             else:
-                error_message = "Failed to fetch issues"
-                if response.text:
-                    try:
-                        error_data = response.json()
-                        if 'errorMessages' in error_data:
-                            error_message += f": {error_data['errorMessages']}"
-                    except:
-                        error_message += f": {response.text}"
-                logger.error(error_message)
-                return []
+                logger.error(f"Failed to get issue {issue_key}: {response.status_code}")
+                return {}
         except Exception as e:
-            logger.error(f"Error searching issues: {str(e)}")
-            return []
+            logger.error(f"Error getting issue {issue_key}: {str(e)}")
+            return {}
 
     def get_project_category(self, project_id):
         """
@@ -1547,3 +879,201 @@ class JiraAPI:
         except Exception as e:
             logger.error(f"Error getting project category: {str(e)}")
             return "Unknown"
+
+    def get_project_participants(self, project_key):
+        """
+        Get all participants (users) who have worked on issues in a project
+        """
+        if not self.is_configured():
+            logger.error("Jira API credentials not configured")
+            return []
+
+        cache_key = f"participants_{project_key}"
+
+        # Return from cache if valid
+        if self._is_cache_valid(cache_key) and cache_key in self._projects_cache:
+            logger.info(f"Using cached participants data for project {project_key}")
+            return self._projects_cache[cache_key]
+
+        try:
+            # Get issues from the project to find assignees, reporters and commenters
+            jql = f'project = {project_key} ORDER BY updated DESC'
+            issues = self.search_issues(
+                jql,
+                fields="assignee,reporter,comment",
+                max_results=100,
+                use_cache=False
+            )
+
+            participants = {}
+
+            # Process assignees and reporters
+            for issue in issues:
+                fields = issue.get('fields', {})
+
+                # Process assignee
+                assignee = fields.get('assignee')
+                if assignee and assignee.get('key'):
+                    user_key = assignee.get('key')
+                    if user_key not in participants:
+                        participants[user_key] = {
+                            'key': user_key,
+                            'name': assignee.get('displayName', 'Unknown'),
+                            'avatarUrl': assignee.get('avatarUrls', {}).get('48x48', ''),
+                            'email': assignee.get('emailAddress', ''),
+                            'issueCount': 0,
+                            'assignedCount': 0,
+                            'reportedCount': 0,
+                            'commentCount': 0
+                        }
+                    participants[user_key]['assignedCount'] += 1
+                    participants[user_key]['issueCount'] += 1
+
+                # Process reporter
+                reporter = fields.get('reporter')
+                if reporter and reporter.get('key'):
+                    user_key = reporter.get('key')
+                    if user_key not in participants:
+                        participants[user_key] = {
+                            'key': user_key,
+                            'name': reporter.get('displayName', 'Unknown'),
+                            'avatarUrl': reporter.get('avatarUrls', {}).get('48x48', ''),
+                            'email': reporter.get('emailAddress', ''),
+                            'issueCount': 0,
+                            'assignedCount': 0,
+                            'reportedCount': 0,
+                            'commentCount': 0
+                        }
+                    participants[user_key]['reportedCount'] += 1
+                    participants[user_key]['issueCount'] += 1
+
+                # Process comments
+                comments = fields.get('comment', {}).get('comments', [])
+                for comment in comments:
+                    comment_author = comment.get('author')
+                    if comment_author and comment_author.get('key'):
+                        user_key = comment_author.get('key')
+                        if user_key not in participants:
+                            participants[user_key] = {
+                                'key': user_key,
+                                'name': comment_author.get('displayName', 'Unknown'),
+                                'avatarUrl': comment_author.get('avatarUrls', {}).get('48x48', ''),
+                                'email': comment_author.get('emailAddress', ''),
+                                'issueCount': 0,
+                                'assignedCount': 0,
+                                'reportedCount': 0,
+                                'commentCount': 0
+                            }
+                        participants[user_key]['commentCount'] += 1
+                        participants[user_key]['issueCount'] = max(1, participants[user_key]['issueCount'])
+
+            # Convert dictionary to list and sort by issue count
+            result = list(participants.values())
+            result.sort(key=lambda x: x['issueCount'], reverse=True)
+
+            # Cache the result
+            self._set_cache('projects', cache_key, result, expiry=30 * 60)  # Cache for 30 minutes
+
+            logger.info(f"Found {len(result)} participants in project {project_key}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error getting project participants: {str(e)}")
+            return []
+
+    def find_reopened_bugs_by_jql(self, project_key, start_date=None, end_date=None, participant=None):
+        """
+        Find reopened bugs in a project using JQL - more direct approach
+        This will return all bugs that have a status change from Done/Resolved/etc to Open/In Progress/etc
+        """
+        if not self.is_configured():
+            logger.error("Jira API credentials not configured")
+            return []
+
+        try:
+            # We can't directly query for status changes with JQL, so we'll get all bugs and then filter
+            # by looking at the changelog
+            jql_parts = [f"project = {project_key}", "issuetype in ('Bug', 'Defect', 'Error', 'Problem')"]
+            
+            # Add participant filter if provided
+            if participant:
+                jql_parts.append(
+                    f'(assignee = "{participant}" OR reporter = "{participant}" OR comment ~ "~{participant}")')
+
+            jql = " AND ".join(jql_parts)
+            
+            # Fetch all bugs first
+            bugs = self.search_issues(
+                jql,
+                fields="key,summary,status,assignee,reporter,issuetype,priority,created,updated",
+                max_results=1000,  # Get more bugs
+                use_cache=False  # Never use cache for reopened bugs
+            )
+            
+            logger.info(f"Found {len(bugs)} total bugs to analyze for reopen status in project {project_key}")
+            
+            # Now check each bug's history for reopen status changes
+            reopened_bugs = []
+            status_changes_count = 0
+            
+            for bug in bugs:
+                issue_key = bug.get('key')
+                issue_detail = self.get_issue_with_changelog(issue_key)
+                changelog = issue_detail.get('changelog', {}).get('histories', [])
+                
+                # Check if bug fits our time filters
+                if start_date or end_date:
+                    fields = bug.get('fields', {})
+                    updated_date = fields.get('updated', '')
+                    
+                    if start_date and updated_date and updated_date < start_date:
+                        continue
+                    if end_date and updated_date and updated_date > end_date:
+                        continue
+                
+                # Look for status changes that indicate a reopen
+                was_reopened = False
+                reopen_time = None
+                
+                for history in changelog:
+                    history_date = history.get('created', '')
+                    
+                    # Apply time filters to the history entry if needed
+                    if start_date or end_date:
+                        if start_date and history_date and history_date < start_date:
+                            continue
+                        if end_date and history_date and history_date > end_date:
+                            continue
+                    
+                    for item in history.get('items', []):
+                        if item.get('field') == 'status':
+                            status_changes_count += 1
+                            from_status = item.get('fromString', '').lower()
+                            to_status = item.get('toString', '').lower()
+                            
+                            # Extended list of "done" statuses and "todo" statuses  
+                            done_statuses = ['done', 'review', 'reviewing', 'resolved', 'closed', 'complete', 'completed', 'fixed']
+                            todo_statuses = ['to do', 'todo', 'in progress', 'open', 'reopened', 'new']
+                            
+                            if (any(status in from_status for status in done_statuses) and
+                                    any(status in to_status for status in todo_statuses)):
+                                was_reopened = True
+                                reopen_time = history_date
+                                logger.info(f"Found reopened bug {issue_key}: Status changed from '{from_status}' to '{to_status}' on {history_date}")
+                                break
+                    
+                    if was_reopened:
+                        break
+                
+                if was_reopened:
+                    # Add reopen information to the bug
+                    bug['was_reopened'] = True
+                    bug['reopen_time'] = reopen_time
+                    reopened_bugs.append(bug)
+            
+            logger.info(f"Analyzed {status_changes_count} status changes and found {len(reopened_bugs)} reopened bugs in project {project_key}")
+            return reopened_bugs
+            
+        except Exception as e:
+            logger.error(f"Error finding reopened bugs by JQL: {str(e)}")
+            return []
