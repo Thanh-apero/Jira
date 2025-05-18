@@ -1357,6 +1357,7 @@ class JiraAPI:
                             to_status = item.get('toString', '').lower()
 
                             # Check if this is from reviewing to an earlier state
+                            # Using the CHANGED FROM ... TO logic as per JIRA JQL syntax
                             if any(review_status in from_status for review_status in from_states) and \
                                     any(early_status in to_status for early_status in to_states):
                                 was_reopened = True

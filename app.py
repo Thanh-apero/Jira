@@ -136,12 +136,23 @@ def check_reopened_bugs():
         to_status = bug.get('reopen_to', 'Unknown')
         transition_info = f"from '{from_status}' to '{to_status}'"
 
+        # Get who reopened the bug
+        reopened_by = bug.get('reopen_by', 'Unknown')
+
+        # Add reopen details for the Discord notifier
+        bug['reopen_details'] = {
+            'from': from_status,
+            'to': to_status,
+            'by': reopened_by, 'when': bug.get('reopen_time', ''),
+            'when': bug.get('reopen_time', '')
+        }
+
         # Send notification with transition info
         result = discord_notifier.send_bug_reopened_notification(bug, webhook_url, transition_info)
 
         # Mark as processed if notification was sent
         if result:
-            jira_api.mark_issue_notified('bugs', issue_key, f"reopened: {transition_info}")
+            jira_api.mark_issue_notified('bugs', issue_key, f"reopened: {transition_info} by {reopened_by}")
 
 
 def check_new_issues():
@@ -1057,6 +1068,42 @@ def get_project_participants(project_key):
     return jsonify({
         "status": "success",
         "participants": participants
+    })
+
+
+@app.route('/api/project-reopened-bugs/<project_key>', methods=['GET'])
+def get_project_reopened_bugs(project_key):
+    """
+    Get reopened bugs for a specific project, filtered by reopener
+    """
+    if not jira_api.is_configured():
+        return jsonify({"status": "error", "message": "Jira API not configured"}), 500
+
+    # Get query parameters
+    reopener = request.args.get('reopener')
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
+    # If no reopener specified, return error
+    if not reopener:
+        return jsonify({"status": "error", "message": "Reopener parameter is required"}), 400
+
+    # Find reopened bugs for this project
+    reopened_bugs = jira_api.find_reopened_bugs_by_jql(
+        project_key,
+        start_date=start_date,
+        end_date=end_date
+    )
+
+    # Filter by reopener
+    filtered_bugs = [bug for bug in reopened_bugs if bug.get('reopen_by') == reopener]
+
+    return jsonify({
+        "status": "success",
+        "reopened_bugs": filtered_bugs,
+        "count": len(filtered_bugs),
+        "project_key": project_key,
+        "reopener": reopener
     })
 
 

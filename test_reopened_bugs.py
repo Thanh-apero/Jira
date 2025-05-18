@@ -109,10 +109,12 @@ def test_reopened_bugs(project_key):
         from_status = bug.get('reopen_from', 'Unknown')
         to_status = bug.get('reopen_to', 'Unknown')
         reopen_time = bug.get('reopen_time', 'Unknown')
+        reopened_by = bug.get('reopen_by', 'Unknown')
 
         logger.info(f"Bug {i}: {issue_key} - {summary}")
         logger.info(f"  Assignee: {assignee}")
         logger.info(f"  Reopened: {from_status} → {to_status} on {reopen_time}")
+        logger.info(f"  Reopened by: {reopened_by}")
 
     if len(reopened_bugs) > 10:
         logger.info(f"...and {len(reopened_bugs) - 10} more reopened bugs")

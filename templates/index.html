@@ -717,6 +717,7 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="/static/js/show_reopened_bugs.js"></script>
 <script>
     // Initialize chart objects as global variables
     let reopenersChart = null;
@@ -740,6 +741,9 @@
             console.error("Reopeners chart canvas not found");
             return;
         }
+        
+        // Store the reopeners data globally for the click handler
+        window.reopenersData = reopeners;
         
         // If no reopeners data or empty array
         if (!reopeners || reopeners.length === 0) {
@@ -790,7 +794,7 @@
                     tooltip: {
                         callbacks: {
                             label: function(context) {
-                                return `${context.parsed.x} reopened bugs`;
+                                return `${context.parsed.x} reopened bugs - Click to view details`;
                             }
                         }
                     }
@@ -803,10 +807,28 @@
                             text: 'Number of Reopened Bugs'
                         }
                     }
+                },
+                onClick: function(event, elements) {
+                    if (elements && elements.length > 0) {
+                        const index = elements[0].index;
+                        const reopenerName = labels[index];
+                        showReopenedBugsDetails(reopenerName);
+                    }
                 }
             }
         });
+        
+        // Add explanatory text
+        const container = document.getElementById('reopenersChart');
+        if (container) {
+            const helpText = document.createElement('p');
+            helpText.className = 'small text-muted text-center mt-2';
+            helpText.textContent = 'Click on a bar to see details of bugs reopened by this person';
+            container.appendChild(helpText);
+        }
     }
+    
+    // Function to show a modal with details of reopened bugs by a specific person
     
     /**
      * Update the chart showing bugs by assignee
