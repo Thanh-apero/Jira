@@ -337,6 +337,11 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Test button for modal -->
+            <div class="text-center mt-3">
+                <button type="button" class="btn btn-primary" onclick="testModalOpening()">Test Modal</button>
+            </div>
         </div>
     </div>
 
@@ -419,25 +424,34 @@
                     </div>
                 </div>
 
-                <!-- Charts Row -->
+                <!-- New Statistics Cards -->
                 <div class="row mb-4">
+                    <!-- Bug Reopeners Card -->
                     <div class="col-md-6">
                         <div class="card">
                             <div class="card-header">
-                                <h6 class="mb-0">Issues by Status</h6>
+                                <h6 class="mb-0">Bug Reopeners</h6>
                             </div>
                             <div class="card-body">
-                                <canvas id="statusChart" height="200"></canvas>
+                                <div id="reopenersChart" class="chart-container"
+                                     style="position: relative; height:250px;">
+                                    <canvas id="reopenersBarChart"></canvas>
+                                </div>
                             </div>
                         </div>
                     </div>
+
+                    <!-- Assignee Bug Stats Card -->
                     <div class="col-md-6">
                         <div class="card">
                             <div class="card-header">
-                                <h6 class="mb-0">Issues by Type</h6>
+                                <h6 class="mb-0">Bugs by Assignee</h6>
                             </div>
                             <div class="card-body">
-                                <canvas id="typeChart" height="200"></canvas>
+                                <div id="assigneeBugStatsChart" class="chart-container"
+                                     style="position: relative; height:250px;">
+                                    <canvas id="assigneeBugBarChart"></canvas>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -704,6 +718,272 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
+    // Initialize chart objects as global variables
+    let reopenersChart = null;
+    let assigneeBugChart = null;
+
+    // Chart update functions removed
+
+    /**
+     * Generate colors for chart segments
+     * @param {number} count - Number of colors needed
+     * @param {boolean} usePresetColors - Whether to use a preset color palette
+     * @returns {Array} Array of color strings
+     */
+    /**
+     * Update the chart showing who reopened bugs
+     * @param {Array} reopeners - Array of [name, count] pairs
+     */
+    function updateReopenersChart(reopeners) {
+        const ctx = document.getElementById('reopenersBarChart');
+        if (!ctx) {
+            console.error("Reopeners chart canvas not found");
+            return;
+        }
+        
+        // If no reopeners data or empty array
+        if (!reopeners || reopeners.length === 0) {
+            const container = document.getElementById('reopenersChart');
+            if (container) {
+                container.innerHTML = '<p class="text-center text-muted mt-5">No reopened bugs data available</p>';
+            }
+            return;
+        }
+        
+        // Process data for the chart
+        const labels = [];
+        const data = [];
+        
+        // Limit to top 10 reopeners for readability
+        const limitedReopeners = reopeners.slice(0, 10);
+        
+        for (const [name, count] of limitedReopeners) {
+            labels.push(name);
+            data.push(count);
+        }
+        
+        // Destroy existing chart if it exists
+        if (reopenersChart) {
+            reopenersChart.destroy();
+        }
+        
+        // Create new chart
+        reopenersChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Reopened Bugs',
+                    data: data,
+                    backgroundColor: '#FF6384',
+                    borderColor: '#FF6384',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                indexAxis: 'y',  // Horizontal bar chart
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return `${context.parsed.x} reopened bugs`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Number of Reopened Bugs'
+                        }
+                    }
+                }
+            }
+        });
+    }
+    
+    /**
+     * Update the chart showing bugs by assignee
+     * @param {Array} assigneeBugStats - Array of [name, {total: number, reopened: number}] pairs
+     */
+    function updateAssigneeBugChart(assigneeBugStats) {
+        const ctx = document.getElementById('assigneeBugBarChart');
+        if (!ctx) {
+            console.error("Assignee bug chart canvas not found");
+            return;
+        }
+        
+        // If no assignee data or empty array
+        if (!assigneeBugStats || assigneeBugStats.length === 0) {
+            const container = document.getElementById('assigneeBugStatsChart');
+            if (container) {
+                container.innerHTML = '<p class="text-center text-muted mt-5">No bug assignee data available</p>';
+            }
+            return;
+        }
+        
+        // Process data for the chart
+        const labels = [];
+        const totalData = [];
+        const reopenedData = [];
+        
+        // Limit to top 10 assignees for readability
+        const limitedAssignees = assigneeBugStats.slice(0, 10);
+        
+        for (const [name, stats] of limitedAssignees) {
+            labels.push(name);
+            totalData.push(stats.total);
+            reopenedData.push(stats.reopened);
+        }
+        
+        // Destroy existing chart if it exists
+        if (assigneeBugChart) {
+            assigneeBugChart.destroy();
+        }
+        
+        // Create new chart
+        assigneeBugChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Total Bugs',
+                        data: totalData,
+                        backgroundColor: '#36A2EB',
+                        borderColor: '#36A2EB',
+                        borderWidth: 1
+                    },
+                    {
+                        label: 'Reopened Bugs',
+                        data: reopenedData,
+                        backgroundColor: '#FF6384',
+                        borderColor: '#FF6384',
+                        borderWidth: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                indexAxis: 'y',  // Horizontal bar chart
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const datasetLabel = context.dataset.label || '';
+                                return `${datasetLabel}: ${context.parsed.x}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Number of Bugs'
+                        },
+                        stacked: false
+                    },
+                    y: {
+                        stacked: false
+                    }
+                }
+            }
+        });
+    }
+
+    function generateChartColors(count, usePresetColors = false) {
+        // Predefined color palettes
+        const statusColors = [
+            '#4e73df', // Blue
+            '#1cc88a', // Green
+            '#36b9cc', // Cyan
+            '#f6c23e', // Yellow
+            '#e74a3b', // Red
+            '#6f42c1', // Purple
+            '#fd7e14', // Orange
+            '#20c997', // Teal
+            '#6c757d', // Gray
+            '#17a2b8', // Info blue
+            '#28a745', // Success green
+            '#dc3545', // Danger red
+        ];
+        
+        const typeColors = {
+            'Bug': '#e74a3b',       // Red
+            'Task': '#4e73df',      // Blue
+            'Epic': '#6f42c1',      // Purple
+            'Story': '#1cc88a',     // Green
+            'Sub-task': '#36b9cc',  // Cyan
+            'Improvement': '#f6c23e' // Yellow
+        };
+        
+        const colors = [];
+        
+        if (usePresetColors) {
+            // For type charts, use the type-specific colors
+            for (let i = 0; i < count; i++) {
+                if (i < Object.keys(typeColors).length) {
+                    const type = Object.keys(typeColors)[i];
+                    colors.push(typeColors[type]);
+                } else if (i < statusColors.length) {
+                    colors.push(statusColors[i]);
+                } else {
+                    // Generate a random color if we run out of predefined ones
+                    const r = Math.floor(Math.random() * 200) + 55;
+                    const g = Math.floor(Math.random() * 200) + 55;
+                    const b = Math.floor(Math.random() * 200) + 55;
+                    colors.push(`rgba(${r}, ${g}, ${b}, 0.8)`);
+                }
+            }
+        } else {
+            // Use status colors for status chart
+            for (let i = 0; i < count; i++) {
+                if (i < statusColors.length) {
+                    colors.push(statusColors[i]);
+                } else {
+                    // Generate a random color if we run out of predefined ones
+                    const r = Math.floor(Math.random() * 200) + 55;
+                    const g = Math.floor(Math.random() * 200) + 55;
+                    const b = Math.floor(Math.random() * 200) + 55;
+                    colors.push(`rgba(${r}, ${g}, ${b}, 0.8)`);
+                }
+            }
+        }
+        
+        return colors;
+    }
+
+    // Test function to check if modal is working
+    function testModalOpening() {
+        console.log("Testing modal opening");
+        // Check if modal element exists
+        const modalElement = document.getElementById('projectStatsModal');
+        if (!modalElement) {
+            console.error("Modal element not found!");
+            alert("Modal element not found. Check HTML structure.");
+            return;
+        }
+        
+        console.log("Modal element found:", modalElement);
+        
+        // Direct bootstrap modal opening
+        try {
+            const modal = new bootstrap.Modal(modalElement);
+            modal.show();
+        } catch (e) {
+            console.error("Error opening modal:", e);
+            alert("Error opening modal: " + e.message);
+        }
+    }
+
     function toggleProject(projectKey) {
         fetch(`/projects/toggle/${projectKey}`, {
             method: 'POST',
@@ -1316,6 +1596,7 @@
     // Update an issue
     // Project Statistics Modal functions
     function openProjectStatsModal(projectKey, projectName) {
+        console.log("Opening project statistics modal for:", projectKey, projectName);
         document.getElementById('statsProjectKey').value = projectKey;
         document.getElementById('statsProjectName').textContent = projectName;
         
@@ -1331,12 +1612,14 @@
     }
     
     function resetStatsFilters() {
+        console.log("Resetting stats filters");
         document.getElementById('statsStartDate').value = '';
         document.getElementById('statsEndDate').value = '';
         document.getElementById('statsParticipantFilter').innerHTML = '<option value="">All Participants</option>';
     }
     
     function applyStatsFilters() {
+        console.log("Applying stats filters");
         const projectKey = document.getElementById('statsProjectKey').value;
         const startDate = document.getElementById('statsStartDate').value;
         const endDate = document.getElementById('statsEndDate').value;
@@ -1346,10 +1629,10 @@
     }
     
     // Charts for statistics
-    let statusChart = null;
-    let typeChart = null;
+    // These are now declared at the top as global variables
     
     function loadProjectStatistics(projectKey, startDate = null, endDate = null, participant = null) {
+        console.log("Loading project statistics:", projectKey, startDate, endDate, participant);
         // Show loading state
         document.getElementById('statsTotalIssues').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
         document.getElementById('statsCompletedTasks').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
@@ -1434,11 +1717,11 @@
         document.getElementById('statsReopenedBugs').textContent = stats.reopened_bugs_count;
         document.getElementById('totalParticipants').textContent = stats.total_participants;
         
-        // Update status chart
-        updateStatusChart(stats.status_counts);
+        // Update reopeners chart
+        updateReopenersChart(stats.reopeners);
         
-        // Update type chart
-        updateTypeChart(stats.issue_types);
+        // Update assignee bug stats chart
+        updateAssigneeBugChart(stats.assignee_bug_stats);
         
         // Update participants table
         const participantsTableBody = document.getElementById('participantsTable').getElementsByTagName('tbody')[0];
@@ -1518,67 +1801,7 @@
         }
     }
     
-    function updateStatusChart(statusCounts) {
-        const ctx = document.getElementById('statusChart').getContext('2d');
-        
-        // Destroy existing chart if it exists
-        if (statusChart) {
-            statusChart.destroy();
-        }
-        
-        // Generate random colors for the status chart
-        const colors = generateRandomColors(Object.keys(statusCounts).length);
-        
-        statusChart = new Chart(ctx, {
-            type: 'doughnut',
-            data: {
-                labels: Object.keys(statusCounts),
-                datasets: [{
-                    data: Object.values(statusCounts),
-                    backgroundColor: colors
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: {
-                        position: 'right'
-                    }
-                }
-            }
-        });
-    }
-    
-    function updateTypeChart(issueTypes) {
-        const ctx = document.getElementById('typeChart').getContext('2d');
-        
-        // Destroy existing chart if it exists
-        if (typeChart) {
-            typeChart.destroy();
-        }
-        
-        // Generate random colors for the type chart
-        const colors = generateRandomColors(Object.keys(issueTypes).length);
-        
-        typeChart = new Chart(ctx, {
-            type: 'doughnut',
-            data: {
-                labels: Object.keys(issueTypes),
-                datasets: [{
-                    data: Object.values(issueTypes),
-                    backgroundColor: colors
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: {
-                        position: 'right'
-                    }
-                }
-            }
-        });
-    }
+
     
     function filterByParticipant(participantKey, participantName) {
         // Set the participant filter dropdown

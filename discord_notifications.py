@@ -228,7 +228,7 @@ class DiscordNotifier:
         # Send notification to Discord (Teal color)
         return self.send_notification(title, description, 3066993, fields, webhook_url)
 
-    def send_bug_reopened_notification(self, bug, webhook_url=None):
+    def send_bug_reopened_notification(self, bug, webhook_url=None, transition_info=None):
         """Send notification about a bug that has been reopened"""
         if not bug:
             return False
@@ -274,6 +274,14 @@ class DiscordNotifier:
             {"name": "Reopened By", "value": reopened_by, "inline": True},
             {"name": "Link", "value": f"{os.getenv('JIRA_URL')}/browse/{issue_key}", "inline": False}
         ]
+
+        # Add transition info if available
+        if transition_info:
+            fields.append({
+                "name": "Transition Info",
+                "value": transition_info,
+                "inline": False
+            })
 
         title = f"🐛 REOPENED BUG: {issue_key}"
         description = f"**{summary}**\n\n⚠️ This bug has been reopened by {reopened_by}{reopen_time_str} and needs attention!"

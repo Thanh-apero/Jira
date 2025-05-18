@@ -89,6 +89,7 @@ def scheduled_bug_check():
 def check_reopened_bugs():
     """
     Check for bugs that have been reopened and notify
+    Reopening is defined as bugs that go from "Reviewing" state back to "Todo" or "In Progress"
     """
     if not global_notification_settings.get("notify_reopened_bugs"):
         logger.info("Skipping reopened bug check as it's globally disabled.")
@@ -103,8 +104,25 @@ def check_reopened_bugs():
         logger.info("No projects are being watched")
         return
 
-    reopened_bugs = jira_api.find_reopened_bugs(project_keys)
-    logger.info(f"Found {len(reopened_bugs)} reopened bugs to notify about")
+    # Only look at bugs from the last day to improve performance
+    from datetime import datetime, timedelta
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    logger.info(f"Checking for bugs reopened between {yesterday} and {today}")
+    reopened_bugs = []
+
+    # Process each project separately to improve performance
+    for project_key in project_keys:
+        project_reopened_bugs = jira_api.find_reopened_bugs_by_jql(
+            project_key,
+            start_date=yesterday,
+            end_date=today
+        )
+        logger.info(f"Found {len(project_reopened_bugs)} reopened bugs in project {project_key}")
+        reopened_bugs.extend(project_reopened_bugs)
+
+    logger.info(f"Found total of {len(reopened_bugs)} reopened bugs to notify about")
 
     for bug in reopened_bugs:
         issue_key = bug.get('key')
@@ -113,12 +131,17 @@ def check_reopened_bugs():
         # Get project-specific webhook URL if available
         webhook_url = project_manager.get_project_webhook(project_key, discord_notifier.default_webhook_url)
 
-        # Send notification
-        result = discord_notifier.send_bug_reopened_notification(bug, webhook_url)
+        # Add transition info if available
+        from_status = bug.get('reopen_from', 'Unknown')
+        to_status = bug.get('reopen_to', 'Unknown')
+        transition_info = f"from '{from_status}' to '{to_status}'"
+
+        # Send notification with transition info
+        result = discord_notifier.send_bug_reopened_notification(bug, webhook_url, transition_info)
 
         # Mark as processed if notification was sent
         if result:
-            jira_api.mark_issue_notified('bugs', issue_key, "reopened")
+            jira_api.mark_issue_notified('bugs', issue_key, f"reopened: {transition_info}")
 
 
 def check_new_issues():

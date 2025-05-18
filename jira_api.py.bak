@@ -701,12 +701,6 @@ class JiraAPI:
             logger.error("Jira API credentials not configured")
             return {}
 
-        # Check cache first for quick response
-        cache_key = f"stats_{project_key}_{start_date}_{end_date}_{participant}"
-        if self._is_cache_valid(cache_key) and cache_key in self._projects_cache:
-            logger.info(f"Using cached statistics for project {project_key}")
-            return self._projects_cache[cache_key]
-
         try:
             # Base JQL to get all issues in the project
             jql_parts = [f"project = {project_key}"]
@@ -720,48 +714,48 @@ class JiraAPI:
             # Add participant filter if provided
             if participant:
                 # Only filter by assignee as requested
-                jql_parts.append(f'assignee = "{participant}"')
+                jql_parts.append(f'assignee = {participant}')
 
             jql = " AND ".join(jql_parts)
 
-            # OPTIMIZATION: Get all issues in a single query with all needed fields
-            # This reduces the number of API calls significantly
+            # Get all issues that match the filters
             all_issues = self.search_issues(
                 jql,
                 fields="key,summary,status,assignee,reporter,issuetype,priority,created,updated,comment",
-                max_results=500,  # Reasonable limit for statistics
-                use_cache=True,  # Use cache when possible
-                expiry=300  # Cache for 5 minutes
+                max_results=1000
             )
 
-            # Count issues by status and type
+            # Get participants (assignees only as requested)
+            participants = self.get_project_participants(project_key)
+
+            # Count issues by status
             status_counts = {}
             issue_types = {}
+
             completed_tasks_count = 0
             bugs_count = 0
-            recent_issues = []
 
-            # Process all issues in a single pass (no additional API calls)
+            # List of recently updated issues
+            recent_issues = []
+            
             for issue in all_issues:
                 fields = issue.get('fields', {})
 
-                # Get status and count
+                # Get status and increment count
                 status = fields.get('status', {}).get('name', 'Unknown')
-                if status in status_counts:
-                    status_counts[status] += 1
-                else:
-                    status_counts[status] = 1
+                if status not in status_counts:
+                    status_counts[status] = 0
+                status_counts[status] += 1
 
-                # Check if completed
+                # Check if it's completed
                 if status.lower() in ['done', 'closed', 'resolved', 'completed']:
                     completed_tasks_count += 1
 
-                # Get issue type and count
+                # Get issue type and increment count
                 issue_type = fields.get('issuetype', {}).get('name', 'Unknown')
-                if issue_type in issue_types:
-                    issue_types[issue_type] += 1
-                else:
-                    issue_types[issue_type] = 1
+                if issue_type not in issue_types:
+                    issue_types[issue_type] = 0
+                issue_types[issue_type] += 1
 
                 # Count bugs
                 if issue_type.lower() == 'bug':
@@ -777,74 +771,20 @@ class JiraAPI:
                     'updated': fields.get('updated')
                 })
 
-            # Sort and limit recent issues
+            # Sort recent issues by updated date (descending)
             recent_issues.sort(key=lambda x: x.get('updated', ''), reverse=True)
-            recent_issues = recent_issues[:50]  # Limit to most recent 50
 
-            # OPTIMIZATION: Get participants with caching
-            # We don't need to recalculate this for every statistics request
-            participants = self.get_project_participants(project_key)
+            # Limit to 50 most recent
+            recent_issues = recent_issues[:50]
 
-            # OPTIMIZATION: For reopened bugs - use efficient detection and caching
-            # Only look at bugs, and cache the result
-            reopened_bugs_cache_key = f"reopened_bugs_{project_key}_{start_date}_{end_date}_{participant}"
-
-            if self._is_cache_valid(reopened_bugs_cache_key) and reopened_bugs_cache_key in self._issues_cache:
-                reopened_bugs = self._issues_cache[reopened_bugs_cache_key]
-                logger.info(f"Using cached reopened bugs for project {project_key}")
-            else:
-                # Get reopened bugs (filtered to bugs only to reduce API calls)
-                reopened_bugs = self.find_reopened_bugs_by_jql(
-                    project_key,
-                    start_date=start_date,
-                    end_date=end_date,
-                    participant=participant
-                )
-                # Cache reopened bugs result for 5 minutes
-                self._set_cache('issues', reopened_bugs_cache_key, reopened_bugs, expiry=300)
-
+            # Get reopened bugs count (using our updated definition)
+            reopened_bugs = self.find_reopened_bugs_by_jql(
+                project_key,
+                start_date=start_date,
+                end_date=end_date,
+                participant=participant
+            )
             reopened_bugs_count = len(reopened_bugs)
-
-            # NEW: Gather statistics about who reopened bugs
-            reopener_stats = {}
-            for bug in reopened_bugs:
-                reopener = bug.get('reopen_by', 'Unknown')
-                if reopener in reopener_stats:
-                    reopener_stats[reopener] += 1
-                else:
-                    reopener_stats[reopener] = 1
-
-            # Sort reopeners by number of reopens (most first)
-            sorted_reopeners = sorted(
-                [(name, count) for name, count in reopener_stats.items()],
-                key=lambda x: x[1],
-                reverse=True
-            )
-
-            # NEW: Gather statistics about bugs by assignee
-            assignee_bug_stats = {}
-            for bug in all_issues:
-                if bug.get('fields', {}).get('issuetype', {}).get('name', '').lower() == 'bug':
-                    assignee = bug.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned')
-                    if assignee in assignee_bug_stats:
-                        assignee_bug_stats[assignee]['total'] += 1
-                    else:
-                        assignee_bug_stats[assignee] = {'total': 1, 'reopened': 0}
-
-            # Add reopened bugs to assignee stats
-            for bug in reopened_bugs:
-                assignee = bug.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned')
-                if assignee in assignee_bug_stats:
-                    assignee_bug_stats[assignee]['reopened'] += 1
-                else:
-                    assignee_bug_stats[assignee] = {'total': 1, 'reopened': 1}
-
-            # Sort assignees by total bugs (most first)
-            sorted_assignees = sorted(
-                [(name, stats) for name, stats in assignee_bug_stats.items()],
-                key=lambda x: x[1]['total'],
-                reverse=True
-            )
 
             # Build statistics response
             statistics = {
@@ -856,14 +796,8 @@ class JiraAPI:
                 'issue_types': issue_types,
                 'recent_issues': recent_issues,
                 'participants': participants,
-                'total_participants': len(participants),
-                # New statistics
-                'reopeners': sorted_reopeners,
-                'assignee_bug_stats': sorted_assignees
+                'total_participants': len(participants)
             }
-
-            # Cache the whole statistics result for 2 minutes
-            self._set_cache('projects', cache_key, statistics, expiry=120)
 
             logger.info(f"Generated statistics for project {project_key}: {bugs_count} bugs, {reopened_bugs_count} reopened bugs")
             return statistics
@@ -871,6 +805,23 @@ class JiraAPI:
         except Exception as e:
             logger.error(f"Error generating project statistics: {str(e)}")
             return {}
+
+        except Exception as e:
+            logger.error(f"Error getting project statistics: {str(e)}")
+            return {
+                'error': str(e),
+                'project_key': project_key,
+                'total_issues': 0,
+                'status_counts': {},
+                'issue_types': {},
+                'issue_priorities': {},
+                'bugs_count': 0,
+                'reopened_bugs_count': 0,
+                'completed_tasks_count': 0,
+                'recent_issues': [],
+                'participants': [],
+                'total_participants': 0
+            }
 
     def search_issues(self, jql, fields=None, max_results=50, expand=None, use_cache=True, expiry=None):
         """Search for issues using JQL"""
@@ -1120,12 +1071,12 @@ class JiraAPI:
         return [issue for issue in all_issues
                 if not self.was_issue_notified('issues', issue.get('key'))]
 
-    def get_issue_with_changelog(self, issue_key, use_cache=True, fields=None):
+    def get_issue_with_changelog(self, issue_key, use_cache=True):
         """
-        Get issue details including changelog with optimized performance
-        optional fields parameter to reduce response size
+        Get issue details including changelog
+        Optimized with caching to improve performance
         """
-        cache_key = f"changelog_{issue_key}_{fields or 'all'}"
+        cache_key = f"changelog_{issue_key}"
 
         # Return from cache if valid and requested
         if use_cache and self._is_cache_valid(cache_key) and cache_key in self._issues_cache:
@@ -1136,38 +1087,26 @@ class JiraAPI:
             return None
 
         try:
-            # Build request parameters
-            params = {"expand": "changelog"}
-            if fields:
-                params["fields"] = fields
-
+            # Single API call to get the issue with changelog
             response = requests.get(
                 f"{self.jira_url}/rest/api/2/issue/{issue_key}",
-                params=params,
-                auth=self.auth,
-                timeout=10  # Add timeout to prevent hanging
+                params={"expand": "changelog"},
+                auth=self.auth
             )
 
             if response.status_code == 200:
                 issue_detail = response.json()
 
-                # Cache the result with shorter expiry for frequently changing issues
+                # Cache the result
                 if use_cache:
-                    expiry = 900 if fields else 3600  # 15 min for partial, 1 hour for full
-                    self._set_cache('issues', cache_key, issue_detail, expiry=expiry)
+                    self._set_cache('issues', cache_key, issue_detail, expiry=3600)  # Cache for 1 hour
 
                 return issue_detail
-            elif response.status_code == 404:
-                logger.warning(f"Issue {issue_key} not found")
-                return None
             else:
-                logger.error(f"Failed to get issue {issue_key}: {response.status_code} - {response.text[:200]}")
+                logger.error(f"Failed to get issue {issue_key} with changelog: {response.status_code}")
                 return None
-        except requests.exceptions.Timeout:
-            logger.error(f"Timeout while fetching issue {issue_key}")
-            return None
         except Exception as e:
-            logger.error(f"Error getting issue {issue_key}: {str(e)}")
+            logger.error(f"Error getting issue with changelog: {str(e)}")
             return None
 
     def get_project_category(self, project_id):
@@ -1231,15 +1170,13 @@ class JiraAPI:
             return self._projects_cache[cache_key]
 
         try:
-            # OPTIMIZATION: Use a more efficient query with just the fields we need
-            # Also limit to recent issues to improve performance
+            # Get issues from the project to find assignees only
             jql = f'project = {project_key} ORDER BY updated DESC'
             issues = self.search_issues(
                 jql,
-                fields="assignee",  # Only request the assignee field
-                max_results=200,  # Reduced from 500 to 200
-                use_cache=True,  # Use cache to avoid repeated calls
-                expiry=1800  # Cache for 30 minutes
+                fields="assignee",
+                max_results=500,  # Increased to get more assignees
+                use_cache=False
             )
 
             participants = {}
@@ -1268,8 +1205,8 @@ class JiraAPI:
             result = list(participants.values())
             result.sort(key=lambda x: x['issueCount'], reverse=True)
 
-            # Cache the result for a longer time (1 hour) since participants don't change often
-            self._set_cache('projects', cache_key, result, expiry=3600)  # Increased from 30 to 60 minutes
+            # Cache the result
+            self._set_cache('projects', cache_key, result, expiry=30 * 60)  # Cache for 30 minutes
 
             logger.info(f"Found {len(result)} participants (assignees) in project {project_key}")
             return result
@@ -1282,19 +1219,17 @@ class JiraAPI:
         """
         Find reopened bugs in a project using JQL.
         This function identifies bugs that have been reopened by looking at their status history.
+        
+        In this specific workflow, bugs move from "Reviewing" status back to "todo" or "in progress" states,
+        which indicates they were reopened.
         """
         if not self.is_configured():
             logger.error("Jira API credentials not configured")
             return []
 
-        # Check cache for reopened bugs
-        cache_key = f"reopen_bugs_{project_key}_{start_date}_{end_date}_{participant}"
-        if self._is_cache_valid(cache_key) and cache_key in self._issues_cache:
-            logger.info(f"Using cached reopened bugs for project {project_key}")
-            return self._issues_cache[cache_key]
-
         try:
-            # First, get all bugs in the project
+            # First, get all bugs in the project - use JQL to narrow down our search
+            # We'll explicitly look for bugs that have been in the "Reviewing" state at some point
             jql_parts = [
                 f"project = {project_key}",
                 "issuetype = Bug"
@@ -1314,20 +1249,16 @@ class JiraAPI:
 
             logger.info(f"Getting bugs with JQL: {jql}")
 
-            # OPTIMIZATION: Get bugs with changelog in a single request
-            # This reduces API calls by using the expand parameter
+            # Get up to 200 bugs from the project (limit to improve performance)
             all_bugs = self.search_issues(
                 jql,
                 fields="key,summary,status,assignee,reporter,issuetype,priority,created,updated",
-                expand="changelog",  # Include changelog directly to avoid separate API calls
                 max_results=200,
-                use_cache=False
+                use_cache=False  # Don't cache bug searches
             )
 
             if not all_bugs:
                 logger.info(f"No bugs found in project {project_key}")
-                # Cache empty result for a short time
-                self._set_cache('issues', cache_key, [], expiry=60)
                 return []
 
             logger.info(f"Found {len(all_bugs)} bugs in project {project_key}, checking for reopens...")
@@ -1335,60 +1266,64 @@ class JiraAPI:
             # For each bug, check its changelog to see if it was reopened
             reopened_bugs = []
 
-            # Define status transition patterns that indicate reopening
+            # CORRECT DEFINITION: Reopen is when bugs move FROM "reviewing" TO "todo" or "in progress"
+            # These are the transitions that indicate a reopen in your workflow
             from_states = ["reviewing"]
             to_states = ["todo", "to do", "in progress", "reopened", "request"]
 
             for bug in all_bugs:
                 issue_key = bug.get('key')
-                changelog = bug.get('changelog', {}).get('histories', [])  # Get changelog directly from expanded data
 
-                # Look for status changes that indicate a reopen
-                was_reopened = False
-                reopen_time = None
-                from_status_value = ""
-                to_status_value = ""
-                reopen_by = ""  # Who made the reopen action
+                try:
+                    # Get the full issue with changelog (with caching)
+                    issue_detail = self.get_issue_with_changelog(issue_key, use_cache=True)
+                    if not issue_detail:
+                        continue
 
-                for history in changelog:
-                    for item in history.get('items', []):
-                        if item.get('field') == 'status':
-                            from_status = item.get('fromString', '').lower()
-                            to_status = item.get('toString', '').lower()
+                    changelog = issue_detail.get('changelog', {}).get('histories', [])
 
-                            # Check if this is from reviewing to an earlier state
-                            if any(review_status in from_status for review_status in from_states) and \
-                                    any(early_status in to_status for early_status in to_states):
-                                was_reopened = True
-                                reopen_time = history.get('created')
-                                from_status_value = item.get('fromString', '')
-                                to_status_value = item.get('toString', '')
+                    # Look for status changes that indicate a reopen
+                    was_reopened = False
+                    reopen_time = None
+                    from_status_value = ""
+                    to_status_value = ""
 
-                                # Get who performed the status change (reopen action)
-                                if 'author' in history:
-                                    reopen_by = history.get('author', {}).get('displayName', 'Unknown')
+                    for history in changelog:
+                        for item in history.get('items', []):
+                            if item.get('field') == 'status':
+                                from_status = item.get('fromString', '').lower()
+                                to_status = item.get('toString', '').lower()
 
-                                logger.info(
-                                    f"Found reopened bug {issue_key}: {from_status} → {to_status} by {reopen_by}")
+                                # Check if this is from reviewing to an earlier state
+                                if any(state in from_status for state in from_states) and \
+                                        any(state in to_status for state in to_states):
+                                    was_reopened = True
+                                    reopen_time = history.get('created')
+                                    from_status_value = item.get('fromString', '')
+                                    to_status_value = item.get('toString', '')
+                                    logger.info(f"Found reopened bug {issue_key}: {from_status} → {to_status}")
+                                    break
+
+                            if was_reopened:
                                 break
 
+                        if was_reopened:
+                            break
+
                     if was_reopened:
-                        break
+                        bug['was_reopened'] = True
+                        bug['reopen_time'] = reopen_time
+                        bug['reopen_from'] = from_status_value
+                        bug['reopen_to'] = to_status_value
+                        reopened_bugs.append(bug)
 
-                if was_reopened:
-                    bug['was_reopened'] = True
-                    bug['reopen_time'] = reopen_time
-                    bug['reopen_from'] = from_status_value
-                    bug['reopen_to'] = to_status_value
-                    bug['reopen_by'] = reopen_by  # Store who reopened it
-                    reopened_bugs.append(bug)
+                except Exception as e:
+                    logger.error(f"Error checking bug {issue_key}: {str(e)}")
 
-            logger.info(f"Found {len(reopened_bugs)} reopened bugs out of {len(all_bugs)} bugs")
-
-            # Cache the result for 5 minutes
-            self._set_cache('issues', cache_key, reopened_bugs, expiry=300)
+            logger.info(
+                f"Found {len(reopened_bugs)} reopened bugs (from reviewing to earlier state) out of {len(all_bugs)} bugs")
             return reopened_bugs
-
+            
         except Exception as e:
             logger.error(f"Error searching for reopened bugs: {str(e)}")
             return []
@@ -1402,9 +1337,9 @@ class JiraAPI:
 
         all_reopened_bugs = []
         for project_key in project_keys:
-            logger.info(f"Checking project {project_key} for reopened bugs")
+            logger.info(f"REOPEN DEBUG: Checking project {project_key} for reopened bugs")
             project_reopened_bugs = self.find_reopened_bugs_by_jql(project_key)
             all_reopened_bugs.extend(project_reopened_bugs)
 
-        logger.info(f"Total reopened bugs across all projects: {len(all_reopened_bugs)}")
+        logger.info(f"REOPEN DEBUG: Total reopened bugs across all projects: {len(all_reopened_bugs)}")
         return all_reopened_bugs
