@@ -748,6 +748,23 @@ def create_jira_tasks():
     results = []
     all_successful = True
 
+    # Get custom field IDs once
+    # IMPORTANT: Replace these with the actual names of your custom fields in Jira if they differ.
+    epic_link_field_id = jira_api.get_field_id_by_name("Epic Link")
+    story_points_field_id = jira_api.get_field_id_by_name("Story Points")  # Or "Story Points Estimate"
+    start_date_field_id = jira_api.get_field_id_by_name("Start Date")
+    epic_name_field_id = jira_api.get_field_id_by_name("Epic Name")  # For creating Epics
+
+    if not epic_link_field_id:
+        logger.warning("Could not find 'Epic Link' custom field ID. Epic linking will be disabled.")
+    if not story_points_field_id:
+        logger.warning("Could not find 'Story Points' custom field ID. Story points will not be set.")
+    if not start_date_field_id:
+        logger.warning("Could not find 'Start Date' custom field ID. Start dates will not be set.")
+    if not epic_name_field_id:
+        logger.warning(
+            "Could not find 'Epic Name' custom field ID. Epic creation might be affected if this field is required for Epics.")
+
     for task_detail in tasks_data:
         epic_key_to_link = None
         task_type = task_detail.get("Type", "Task")
@@ -759,8 +776,6 @@ def create_jira_tasks():
 
             logger.info(f"Processing Epic '{epic_name_from_task}' for task '{task_detail.get('Summary')}'.")
             try:
-                # Assumption 1: jira_api has a method to find an epic by its name.
-                # This method should return an object with a 'key' or None.
                 found_epic = jira_api.find_epic_by_name(project_key, epic_name_from_task)
 
                 if found_epic and found_epic.get("key"):
@@ -769,13 +784,19 @@ def create_jira_tasks():
                 else:
                     logger.info(
                         f"Epic '{epic_name_from_task}' not found in project {project_key}. Attempting to create it.")
-                    # Assumption 2: jira_api.create_issue can create an Epic.
-                    # The payload expects 'summary' for the Epic's name and 'issuetype' as 'Epic'.
-                    # The jira_api module is responsible for mapping this to correct Jira fields for Epic creation (e.g. 'Epic Name' custom field).
+
                     new_epic_payload = {
                         "summary": epic_name_from_task,
-                        "issuetype": "Epic"
+                        "issuetype": "Epic",  # Ensure issuetype is correctly "Epic"
+                        # Potentially add project key here if create_issue doesn't take it as a separate param for epics
+                        # "project": {"key": project_key}, # Depending on your create_issue implementation for Epics
                     }
+                    if epic_name_field_id:  # Required for some Jira setups (especially classic)
+                        new_epic_payload[epic_name_field_id] = epic_name_from_task
+                    else:
+                        logger.warning(
+                            f"Epic Name custom field ID not found. Creating Epic '{epic_name_from_task}' without setting specific Epic Name field. Summary will be used.")
+
                     created_epic_response = jira_api.create_issue(project_key, new_epic_payload)
 
                     if created_epic_response and not created_epic_response.get("error") and created_epic_response.get(
@@ -802,16 +823,18 @@ def create_jira_tasks():
                         })
                         logger.error(
                             f"Failed to create Epic '{epic_name_from_task}' for task '{task_detail.get('Summary')}': {error_message_epic}")
-            except AttributeError:
+                        continue  # Skip creating task if its epic failed
+            except AttributeError as e:
                 logger.error(
-                    "`jira_api.find_epic_by_name` method not found. Please implement it to find epics by name.")
+                    f"`jira_api.find_epic_by_name` or `jira_api.create_issue` method might have an issue or a required field ID was not found: {e}")
                 all_successful = False
                 results.append({
-                    "status": "error_finding_epic",
+                    "status": "error_finding_or_creating_epic",
                     "epic_name_attempted": epic_name_from_task,
                     "task_summary_related": task_detail.get("Summary"),
-                    "message": "Server misconfiguration: Epic search functionality not available."
+                    "message": "Server misconfiguration or error in Epic processing logic."
                 })
+                continue  # Skip creating task if its epic failed
             except Exception as e:
                 logger.error(
                     f"An unexpected error occurred during Epic processing for '{epic_name_from_task}': {str(e)}")
@@ -822,94 +845,156 @@ def create_jira_tasks():
                     "task_summary_related": task_detail.get("Summary"),
                     "message": f"Unexpected error processing epic: {str(e)}"
                 })
+                continue  # Skip creating task if its epic failed
 
-        # Prepare issue_payload for the task, only including specified fields
+        # Prepare issue_payload for the task
         issue_payload = {
             "summary": task_detail.get("Summary"),
-            "issuetype": issue_type,  # Use task_type from the form
+            "issuetype": {"name": issue_type},  # Jira usually expects issuetype as an object with name or id
+            # "project": {"key": project_key}, # Included in create_issue call, not in payload itself generally
         }
 
-        if epic_key_to_link:
-            # Assumption 3: "epic_link_value" is the correct key your jira_api expects for linking,
-            # and it expects the Epic's issue KEY.
-            issue_payload["epic_link_value"] = epic_key_to_link
-
-        if task_detail.get("Priority"):
-            issue_payload["priority"] = task_detail.get("Priority")
-
-        # Map estimate_time to original_estimate for Jira
-        if task_detail.get("Estimate Time (h)"):
-            estimate_hours = float(task_detail.get("Estimate Time (h)"))
-            issue_payload["original_estimate"] = f"{estimate_hours}h"  # Format as "5h" for Jira
-
-        # Thêm start_date nếu có
-        if task_detail.get("Start Date"):
-            issue_payload["start_date"] = task_detail.get("Start Date")
-
-        # Thêm story_points nếu có
-        if task_detail.get("Story Points"):
-            issue_payload["story_points"] = task_detail.get("Story Points")
-
-        # Thêm fix_version nếu có
-        if task_detail.get("fix_version"):
-            issue_payload["fix_version"] = task_detail.get("fix_version")
-
-        # Thêm sprint_id nếu có
-        if task_detail.get("sprint_id"):
-            issue_payload["sprint_id"] = task_detail.get("sprint_id")
-
-        # Add description if available
+        # Description
+        description_parts = []
         if task_detail.get("Description"):
-            issue_payload["description"] = task_detail.get("Description")
-
-        # Add notes to description if available
+            description_parts.append(task_detail.get("Description"))
         if task_detail.get("Notes"):
-            if "description" in issue_payload:
-                issue_payload["description"] += f"\n\nNotes:\n{task_detail.get('Notes')}"
-            else:
-                issue_payload["description"] = f"Notes:\n{task_detail.get('Notes')}"
+            description_parts.append(f"\\n\\nNotes:\\n{task_detail.get('Notes')}")
+        if description_parts:
+            issue_payload["description"] = "".join(description_parts)
 
-        logger.info(f"Creating Jira task for project {project_key} with payload: {issue_payload}")
+        # Priority
+        if task_detail.get("Priority"):
+            issue_payload["priority"] = {"name": task_detail.get("Priority")}  # Priority is also often an object
+
+        # Epic Link
+        if epic_key_to_link and epic_link_field_id:
+            issue_payload[epic_link_field_id] = epic_key_to_link
+        elif epic_key_to_link and not epic_link_field_id:
+            logger.warning(
+                f"Cannot link task '{task_detail.get('Summary')}' to Epic '{epic_key_to_link}'. 'Epic Link' custom field ID not found.")
+
+        # Time Tracking (Original Estimate)
+        if task_detail.get("Estimate Time (h)"):
+            try:
+                estimate_hours = float(task_detail.get("Estimate Time (h)"))
+                # Jira expects time in seconds or specific format like "1w 2d 3h 30m"
+                # For simplicity, converting hours to seconds. Some Jira instances might also accept "5h" directly.
+                # The standard field is `timetracking` which is an object.
+                issue_payload["timetracking"] = {
+                    "originalEstimate": f"{estimate_hours}h"  # e.g., "5h", "2.5h"
+                    # "originalEstimate": int(estimate_hours * 3600) # in seconds
+                }
+            except ValueError:
+                logger.warning(
+                    f"Invalid format for 'Estimate Time (h)': {task_detail.get('Estimate Time (h)')}. Skipping.")
+
+        # Start Date
+        if task_detail.get("Start Date") and start_date_field_id:
+            try:
+                # Convert MM/DD/YYYY from Excel to YYYY-MM-DD for Jira
+                start_date_obj = datetime.strptime(task_detail.get("Start Date"), "%m/%d/%Y")
+                issue_payload[start_date_field_id] = start_date_obj.strftime("%Y-%m-%d")
+            except ValueError:
+                logger.warning(
+                    f"Invalid date format for 'Start Date': {task_detail.get('Start Date')}. Expected MM/DD/YYYY. Skipping.")
+        elif task_detail.get("Start Date") and not start_date_field_id:
+            logger.warning(
+                f"Cannot set Start Date for task '{task_detail.get('Summary')}'. 'Start Date' custom field ID not found.")
+
+        # Story Points
+        if task_detail.get("Story Points") and story_points_field_id:
+            try:
+                story_points_value = float(task_detail.get("Story Points"))
+                issue_payload[story_points_field_id] = story_points_value
+            except ValueError:
+                logger.warning(
+                    f"Invalid format for 'Story Points': {task_detail.get('Story Points')}. Must be a number. Skipping.")
+        elif task_detail.get("Story Points") and not story_points_field_id:
+            logger.warning(
+                f"Cannot set Story Points for task '{task_detail.get('Summary')}'. 'Story Points' custom field ID not found.")
+
+        # Fix Version(s) - Jira expects an array of objects by name or ID
+        if task_detail.get("fix_version"):
+            # Assuming fix_version is a single version name string from input
+            # For multiple, you might need to split a comma-separated string
+            issue_payload["fixVersions"] = [{"name": task_detail.get("fix_version")}]
+
+        # Sprint ID - This usually needs to be the numeric ID of the sprint.
+        # Linking to sprint often happens *after* issue creation via a separate Agile API endpoint.
+        # The `create_issue` payload might not directly support adding to sprint for all Jira versions/setups.
+        # If your `jira_api.create_issue` handles `sprint_id` internally, this is fine.
+        # Otherwise, you'd call `jira_api.add_issue_to_sprint(sprint_id, issue_key)` after successful creation.
+        sprint_id_to_link = task_detail.get("sprint_id")
+
+        logger.info(f"Attempting to create Jira task for project {project_key}. Payload: {issue_payload}")
         result = jira_api.create_issue(project_key, issue_payload)
 
         if result and not result.get("error") and result.get("key"):
+            created_issue_key = result.get("key")
             results.append(
-                {"status": "success", "task_summary": task_detail.get("Summary"), "issue_key": result.get("key"),
+                {"status": "success", "task_summary": task_detail.get("Summary"), "issue_key": created_issue_key,
                  "linked_epic_key": epic_key_to_link if epic_key_to_link else "N/A"})
+
+            # If sprint_id is provided and issue created, try to add to sprint
+            if sprint_id_to_link:
+                logger.info(f"Attempting to add issue {created_issue_key} to sprint {sprint_id_to_link}")
+                sprint_add_success = jira_api.add_issue_to_sprint(sprint_id_to_link, created_issue_key)
+                if sprint_add_success:
+                    logger.info(f"Successfully added {created_issue_key} to sprint {sprint_id_to_link}.")
+                else:
+                    logger.warning(
+                        f"Failed to add {created_issue_key} to sprint {sprint_id_to_link}. Task created but not added to sprint.")
+                    # Optionally, update the result for this task to indicate sprint linking failure
+                    for res_item in results:
+                        if res_item.get("issue_key") == created_issue_key:
+                            res_item["sprint_status"] = f"Failed to add to sprint {sprint_id_to_link}"
+                            break
         else:
             all_successful = False
             error_message = "Failed to create task"
+            # ... (rest of your existing error handling for task creation) ...
             if result and result.get("message"):
-                if isinstance(result.get("message"), dict) and result.get("message").get('errorMessages'):
-                    error_message = ", ".join(result.get("message").get('errorMessages'))
+                if isinstance(result.get("message"), dict):
+                    if result.get("message").get('errorMessages'):
+                        error_message = ", ".join(result.get("message").get('errorMessages'))
+                    # Also check for 'errors' which often contains field-specific issues
+                    elif result.get("message").get('errors'):
+                        field_errors = []
+                        for field, msg in result.get("message").get('errors').items():
+                            field_errors.append(f"{field}: {msg}")
+                        error_message = "; ".join(field_errors) if field_errors else error_message
+
                 elif isinstance(result.get("message"), str):
                     error_message = result.get("message")
 
-            # Include Jira's raw error response if available and not too large or sensitive
-            error_details = result if result else "No response from Jira API"
-            # Avoid overly verbose logs or responses if 'details' could be huge
-            if isinstance(error_details, dict) and len(str(error_details)) > 1000:
+            error_details = result if result else "No response or unknown error from Jira API during task creation"
+            if isinstance(error_details, dict) and len(str(error_details)) > 1000:  # Truncate large error details
                 error_details = {"errorMessages": error_details.get("errorMessages", []),
-                                 "errors": error_details.get("errors", {})}
+                                 "errors": error_details.get("errors", {})}  # Keep relevant parts
 
-            results.append({"status": "error",
+            results.append({"status": "error_creating_task",
                             "task_summary": task_detail.get("Summary"),
                             "message": error_message,
-                            "details": error_details,
-                            "linked_epic_key": epic_key_to_link if epic_key_to_link else "N/A"
+                            "details": error_details,  # Provide details for debugging
+                            "linked_epic_key": epic_key_to_link if epic_key_to_link else "N/A",
+                            "payload_sent": issue_payload  # Log the payload for debugging
                             })
             logger.error(
-                f"Failed to create task '{task_detail.get('Summary')}': {error_message}. Details: {error_details}")
+                f"Failed to create task '{task_detail.get('Summary')}': {error_message}. Payload: {issue_payload}. Details: {error_details}")
 
     if all_successful:
         return jsonify({"status": "success", "message": "All tasks created successfully.", "results": results})
     else:
         # Check if any task was successful, or if all failed due to (e.g.) epic issues before task creation
         if any(r.get("status") == "success" for r in results):
-            return jsonify({"status": "partial_success", "message": "Some tasks/operations could not be completed.",
-                        "results": results}), 207  # Multi-Status
+            # HTTP 207 Multi-Status might be appropriate if some operations succeeded and some failed.
+            return jsonify({"status": "partial_success",
+                            "message": "Some tasks/operations could not be completed. Review results for details.",
+                            "results": results}), 207
         else:  # No task creation was successful at all
-            return jsonify({"status": "error", "message": "Failed to create any tasks. See details.",
+            return jsonify(
+                {"status": "error", "message": "Failed to create any tasks. Please check server logs and task details.",
                             "results": results}), 500
 
 

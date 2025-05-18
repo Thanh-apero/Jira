@@ -1278,6 +1278,75 @@ class JiraAPI:
             logger.error(f"Error getting project participants: {str(e)}")
             return []
 
+    def create_issue(self, project_key, issue_data):
+        """Create an issue in Jira."""
+        if not self.is_configured():
+            logger.error("Jira API not configured. Cannot create issue.")
+            return {"error": True, "message": "Jira API not configured."}
+
+        try:
+            # The payload for creating an issue typically involves a "fields" object
+            payload = {
+                "fields": {
+                    "project": {
+                        "key": project_key
+                    },
+                    # Unpack other issue_data directly into fields
+                    **issue_data
+                }
+            }
+
+            # Ensure issuetype is an object if it's a string (e.g. "Task")
+            # Some Jira instances expect {"name": "Task"} or {"id": "10001"}
+            if "issuetype" in payload["fields"] and isinstance(payload["fields"]["issuetype"], str):
+                payload["fields"]["issuetype"] = {"name": payload["fields"]["issuetype"]}
+
+            # Ensure priority is an object if it's a string
+            if "priority" in payload["fields"] and isinstance(payload["fields"]["priority"], str):
+                payload["fields"]["priority"] = {"name": payload["fields"]["priority"]}
+
+            logger.info(f"Attempting to create issue in project {project_key} with payload: {json.dumps(payload)}")
+
+            response = requests.post(
+                f"{self.jira_url}/rest/api/2/issue",
+                json=payload,
+                auth=self.auth,
+                headers={"Content-Type": "application/json"}
+            )
+
+            if response.status_code == 201:  # 201 Created is success
+                created_issue = response.json()
+                logger.info(f"Successfully created issue {created_issue.get('key')} in project {project_key}")
+                return {"key": created_issue.get('key'), "self": created_issue.get('self'), "error": False}
+            else:
+                error_message = f"Failed to create issue. Status: {response.status_code}"
+                details = {}
+                try:
+                    details = response.json()
+                    if 'errorMessages' in details and details['errorMessages']:
+                        error_message += f" - Errors: {', '.join(details['errorMessages'])}"
+                    if 'errors' in details and details['errors']:
+                        field_errors = []
+                        for field, msg in details['errors'].items():
+                            field_errors.append(f"{field}: {msg}")
+                        error_message += f" - Field Errors: {'; '.join(field_errors)}"
+
+                except ValueError:  # Not a JSON response
+                    error_message += f" - Response: {response.text[:500]}"  # Log first 500 chars
+
+                logger.error(error_message)
+                logger.error(
+                    f"Full Jira response for create_issue error: {response.text}")  # Log full response for debugging
+                return {"error": True, "message": error_message, "details": details,
+                        "status_code": response.status_code}
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"RequestException creating issue: {str(e)}")
+            return {"error": True, "message": f"Network error creating issue: {str(e)}"}
+        except Exception as e:
+            logger.error(f"Unexpected error creating issue: {str(e)}")
+            return {"error": True, "message": f"Unexpected server error creating issue: {str(e)}"}
+
     def find_reopened_bugs_by_jql(self, project_key, start_date=None, end_date=None, participant=None):
         """
         Find reopened bugs in a project using JQL.
