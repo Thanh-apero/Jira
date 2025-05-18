@@ -1336,8 +1336,8 @@ class JiraAPI:
             reopened_bugs = []
 
             # Define status transition patterns that indicate reopening
-            from_states = ["reviewing"]
-            to_states = ["todo", "to do", "in progress", "reopened", "request"]
+            from_states = ["reviewing", "review", "in review", "under review", "done", "closed"]
+            to_states = ["todo", "to do", "in progress", "reopened", "request", "backlog", "open"]
 
             for bug in all_bugs:
                 issue_key = bug.get('key')

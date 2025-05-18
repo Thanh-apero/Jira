@@ -82,8 +82,9 @@
         .modal-dialog {
             max-width: 500px;
         }
-        .modal-dialog-lg {
-            max-width: 95%;
+        /* Custom styling for extra-wide modals */
+        .modal-xl {
+            max-width: 95%; /* Make it use almost the full width */
             margin: 1.75rem auto;
         }
         
@@ -353,7 +354,7 @@
 <!-- Project Statistics Modal -->
 <div class="modal fade" id="projectStatsModal" tabindex="-1" aria-labelledby="projectStatsModalLabel"
      aria-hidden="true">
-    <div class="modal-dialog modal-dialog-lg modal-dialog-scrollable">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="projectStatsModalLabel">Project Statistics: <span
@@ -545,7 +546,7 @@
 
 <!-- Add Task Modal -->
 <div class="modal fade" id="addTaskModal" tabindex="-1" aria-labelledby="addTaskModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-lg modal-dialog-scrollable">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="addTaskModalLabel">Add Tasks for Project: <span
@@ -722,6 +723,7 @@
     // Initialize chart objects as global variables
     let reopenersChart = null;
     let assigneeBugChart = null;
+    let currentStatsRequest = null; // Track the current statistics request
 
     // Chart update functions removed
 
@@ -736,23 +738,44 @@
      * @param {Array} reopeners - Array of [name, count] pairs
      */
     function updateReopenersChart(reopeners) {
-        const ctx = document.getElementById('reopenersBarChart');
-        if (!ctx) {
-            console.error("Reopeners chart canvas not found");
+        const container = document.getElementById('reopenersChart');
+        if (!container) {
+            console.error("Reopeners chart container not found");
             return;
         }
-        
-        // Store the reopeners data globally for the click handler
-        window.reopenersData = reopeners;
+
+        const spinner = document.getElementById('reopenersSpinnerContainer');
+        if (spinner) {
+            spinner.remove();
+        }
         
         // If no reopeners data or empty array
         if (!reopeners || reopeners.length === 0) {
-            const container = document.getElementById('reopenersChart');
-            if (container) {
-                container.innerHTML = '<p class="text-center text-muted mt-5">No reopened bugs data available</p>';
+            container.innerHTML = '<p class="text-center text-muted mt-5">No reopened bugs data available</p>';
+            if (reopenersChart) {
+                reopenersChart.destroy();
+                reopenersChart = null;
             }
             return;
         }
+        
+        // Data is available. Ensure the canvas element is present.
+        let ctx = document.getElementById('reopenersBarChart');
+        if (!ctx) {
+            // Attempt to restore canvas if it was removed (e.g. by "no data" message)
+            // and loadProjectStatistics somehow didn't run right before this.
+            console.warn("reopenersBarChart canvas not found, attempting to restore.");
+            container.innerHTML = '<canvas id="reopenersBarChart"></canvas>';
+            ctx = document.getElementById('reopenersBarChart');
+            if (!ctx) {
+                console.error("Failed to ensure reopenersBarChart canvas.");
+                container.innerHTML = '<p class="text-center text-danger mt-5">Error: Chart canvas missing.</p>';
+                if (reopenersChart) { reopenersChart.destroy(); reopenersChart = null; }
+                return;
+            }
+        }
+        
+        // Store the reopeners data globally for the click handler
         
         // Process data for the chart
         const labels = [];
@@ -819,8 +842,12 @@
         });
         
         // Add explanatory text
-        const container = document.getElementById('reopenersChart');
-        if (container) {
+        // Remove any pre-existing help text to avoid duplication
+        const existingHelpTexts = container.querySelectorAll('p.small.text-muted.text-center.mt-2');
+        existingHelpTexts.forEach(ht => ht.remove());
+        
+        // 'container' is already defined at the top of this function, no need to redeclare
+        if (container) { 
             const helpText = document.createElement('p');
             helpText.className = 'small text-muted text-center mt-2';
             helpText.textContent = 'Click on a bar to see details of bugs reopened by this person';
@@ -835,19 +862,40 @@
      * @param {Array} assigneeBugStats - Array of [name, {total: number, reopened: number}] pairs
      */
     function updateAssigneeBugChart(assigneeBugStats) {
-        const ctx = document.getElementById('assigneeBugBarChart');
-        if (!ctx) {
-            console.error("Assignee bug chart canvas not found");
+        const container = document.getElementById('assigneeBugStatsChart');
+        if (!container) {
+            console.error("Assignee bug chart container not found");
             return;
+        }
+
+        const spinner = document.getElementById('assigneeBugSpinnerContainer');
+        if (spinner) {
+            spinner.remove();
         }
         
         // If no assignee data or empty array
         if (!assigneeBugStats || assigneeBugStats.length === 0) {
-            const container = document.getElementById('assigneeBugStatsChart');
-            if (container) {
-                container.innerHTML = '<p class="text-center text-muted mt-5">No bug assignee data available</p>';
+            container.innerHTML = '<p class="text-center text-muted mt-5">No bug assignee data available</p>';
+            if (assigneeBugChart) {
+                assigneeBugChart.destroy();
+                assigneeBugChart = null;
             }
             return;
+        }
+        
+        // Data is available. Ensure the canvas element is present.
+        let ctx = document.getElementById('assigneeBugBarChart');
+        if (!ctx) {
+            // Attempt to restore canvas
+            console.warn("assigneeBugBarChart canvas not found, attempting to restore.");
+            container.innerHTML = '<canvas id="assigneeBugBarChart"></canvas>';
+            ctx = document.getElementById('assigneeBugBarChart');
+            if (!ctx) {
+                console.error("Failed to ensure assigneeBugBarChart canvas.");
+                container.innerHTML = '<p class="text-center text-danger mt-5">Error: Chart canvas missing.</p>';
+                if (assigneeBugChart) { assigneeBugChart.destroy(); assigneeBugChart = null; }
+                return;
+            }
         }
         
         // Process data for the chart
@@ -1655,17 +1703,37 @@
     
     function loadProjectStatistics(projectKey, startDate = null, endDate = null, participant = null) {
         console.log("Loading project statistics:", projectKey, startDate, endDate, participant);
-        // Show loading state
+        
+        // Create a unique request identifier for this specific request
+        const requestId = `${projectKey}-${Date.now()}`;
+        currentStatsRequest = requestId;
+        
+        // Clear any previous data completely
+        if (reopenersChart) {
+            reopenersChart.destroy();
+            reopenersChart = null;
+        }
+        
+        if (assigneeBugChart) {
+            assigneeBugChart.destroy();
+            assigneeBugChart = null;
+        }
+        
+        // Clear charts containers and add canvas + spinner
+        document.getElementById('reopenersChart').innerHTML = '<canvas id="reopenersBarChart"></canvas><div class="text-center my-3" id="reopenersSpinnerContainer"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div></div>';
+        document.getElementById('assigneeBugStatsChart').innerHTML = '<canvas id="assigneeBugBarChart"></canvas><div class="text-center my-3" id="assigneeBugSpinnerContainer"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div></div>';
+        
+        // Show loading state for summary stats
         document.getElementById('statsTotalIssues').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
         document.getElementById('statsCompletedTasks').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
         document.getElementById('statsReopenedBugs').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
         document.getElementById('totalParticipants').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
         
-        // Clear tables
+        // Clear tables and show loading indicators
         document.getElementById('participantsTable').getElementsByTagName('tbody')[0].innerHTML = 
-            '<tr><td colspan="6" class="text-center">Loading participants...</td></tr>';
+            '<tr><td colspan="6" class="text-center"><div class="spinner-border spinner-border-sm" role="status"></div> Loading participants...</td></tr>';
         document.getElementById('recentIssuesTable').getElementsByTagName('tbody')[0].innerHTML = 
-            '<tr><td colspan="6" class="text-center">Loading issues...</td></tr>';
+            '<tr><td colspan="6" class="text-center"><div class="spinner-border spinner-border-sm" role="status"></div> Loading issues...</td></tr>';
         
         // Build URL with query parameters
         let url = `/api/project-statistics/${projectKey}`;
@@ -1682,6 +1750,12 @@
         fetch(url)
             .then(response => response.json())
             .then(data => {
+                // Check if this is still the current request
+                if (currentStatsRequest !== requestId) {
+                    console.log('Ignoring outdated statistics response');
+                    return; // Ignore this response as it's for an outdated request
+                }
+                
                 if (data.status === 'success') {
                     displayProjectStatistics(data.statistics);
                     
@@ -1691,13 +1765,43 @@
                     }
                 } else {
                     console.error('Error loading project statistics:', data.message);
-                    alert('Failed to load project statistics. Please try again.');
+                    handleStatsLoadError('Failed to load project statistics. Please try again.');
                 }
             })
             .catch(error => {
+                // Check if this is still the current request
+                if (currentStatsRequest !== requestId) {
+                    console.log('Ignoring error from outdated statistics request');
+                    return; // Ignore this error as it's for an outdated request
+                }
+                
                 console.error('Error loading project statistics:', error);
-                alert('An unexpected error occurred while loading project statistics.');
+                handleStatsLoadError('An unexpected error occurred while loading project statistics.');
             });
+    }
+    
+    // Helper function to handle statistics loading errors
+    function handleStatsLoadError(message) {
+        // Show error message in stats containers
+        document.getElementById('statsTotalIssues').textContent = 'Error';
+        document.getElementById('statsCompletedTasks').textContent = 'Error';
+        document.getElementById('statsReopenedBugs').textContent = 'Error';
+        document.getElementById('totalParticipants').textContent = 'Error';
+        
+        // Show error message in chart containers
+        document.getElementById('reopenersChart').innerHTML = 
+            `<div class="alert alert-danger">Error loading data</div>`;
+        document.getElementById('assigneeBugStatsChart').innerHTML = 
+            `<div class="alert alert-danger">Error loading data</div>`;
+            
+        // Show error message in tables
+        document.getElementById('participantsTable').getElementsByTagName('tbody')[0].innerHTML = 
+            `<tr><td colspan="6" class="text-center text-danger">Error loading participants</td></tr>`;
+        document.getElementById('recentIssuesTable').getElementsByTagName('tbody')[0].innerHTML = 
+            `<tr><td colspan="6" class="text-center text-danger">Error loading issues</td></tr>`;
+        
+        // Display alert
+        alert(message);
     }
     
     function loadParticipantsForFilter(projectKey, participants = null) {
@@ -1740,9 +1844,19 @@
         document.getElementById('totalParticipants').textContent = stats.total_participants;
         
         // Update reopeners chart
+        // Ensure the container is clean before drawing the chart
+        const reopenersChartContainer = document.getElementById('reopenersChart');
+        if (reopenersChartContainer.querySelector('#reopenersSpinnerContainer')) { // Check if spinner is still there from initial load
+             reopenersChartContainer.querySelector('#reopenersSpinnerContainer').remove();
+        }
         updateReopenersChart(stats.reopeners);
         
         // Update assignee bug stats chart
+        // Ensure the container is clean before drawing the chart
+        const assigneeBugStatsChartContainer = document.getElementById('assigneeBugStatsChart');
+        if (assigneeBugStatsChartContainer.querySelector('#assigneeBugSpinnerContainer')) { // Check if spinner is still there
+            assigneeBugStatsChartContainer.querySelector('#assigneeBugSpinnerContainer').remove();
+        }
         updateAssigneeBugChart(stats.assignee_bug_stats);
         
         // Update participants table

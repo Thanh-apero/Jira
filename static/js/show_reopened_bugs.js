@@ -8,7 +8,7 @@ function showReopenedBugsDetails(reopenerName) {
     if (!modal) {
         const modalHTML = `
             <div class="modal fade" id="${modalId}" tabindex="-1" aria-labelledby="reopenedBugsModalLabel" aria-hidden="true">
-                <div class="modal-dialog modal-lg">
+                <div class="modal-dialog modal-xl">
                     <div class="modal-content">
                         <div class="modal-header">
                             <h5 class="modal-title" id="reopenedBugsModalLabel">Bugs Reopened by <span id="reopenerName"></span></h5>
@@ -60,9 +60,19 @@ function showReopenedBugsDetails(reopenerName) {
         url += `?${params.toString()}`;
     }
     
+    // Create a unique request ID to track this specific request
+    const requestId = `reopen_${projectKey}_${reopenerName}_${Date.now()}`;
+    window.currentReopenRequest = requestId;
+    
     fetch(url)
         .then(response => response.json())
         .then(data => {
+            // Check if this is still the current request
+            if (window.currentReopenRequest !== requestId) {
+                console.log('Ignoring outdated reopened bugs response');
+                return;
+            }
+            
             if (data.status === 'success' && data.statistics) {
                 // Extract reopened bugs from the statistics
                 const reopenerStats = data.statistics.reopeners || [];
@@ -98,12 +108,12 @@ function showReopenedBugsDetails(reopenerName) {
                         </div>
                         <div class="card-body">
                             <pre>project = ${projectKey} AND type = Bug 
-AND status CHANGED FROM ("Reviewing", "Review", "In Review", "Under Review", "Resolved", "Done", "Closed")
+AND status CHANGED FROM ("Reviewing", "Review", "In Review", "Under Review", "Done", "Closed")
 TO ("To Do", "Todo", "Backlog", "Open", "In Progress", "Reopened")
 ${startDate ? `AND updated >= "${startDate}"` : ""} 
 ${endDate ? `AND updated <= "${endDate}"` : ""}
-AND updatedBy = "${reopenerName}"</pre>
-                            <a href="${jiraBaseUrl}/issues/?jql=project%20%3D%20${projectKey}%20AND%20type%20%3D%20Bug%20AND%20status%20CHANGED%20FROM%20(%22Reviewing%22%2C%20%22Review%22%2C%20%22In%20Review%22%2C%20%22Under%20Review%22%2C%20%22Resolved%22%2C%20%22Done%22%2C%20%22Closed%22)%20TO%20(%22To%20Do%22%2C%20%22Todo%22%2C%20%22Backlog%22%2C%20%22Open%22%2C%20%22In%20Progress%22%2C%20%22Reopened%22)${startDate ? `%20AND%20updated%20%3E%3D%20%22${startDate}%22` : ""}${endDate ? `%20AND%20updated%20%3C%3D%20%22${endDate}%22` : ""}%20AND%20updatedBy%20%3D%20%22${encodeURIComponent(reopenerName)}%22" class="btn btn-sm btn-primary" target="_blank">
+</pre>
+                            <a href="${jiraBaseUrl}/issues/?jql=project%20%3D%20${projectKey}%20AND%20type%20%3D%20Bug%20AND%20status%20CHANGED%20FROM%20(%22Reviewing%22%2C%20%22Review%22%2C%20%22In%20Review%22%2C%20%22Under%20Review%22%2C%20%22Done%22%2C%20%22Closed%22)%20TO%20(%22To%20Do%22%2C%20%22Todo%22%2C%20%22Backlog%22%2C%20%22Open%22%2C%20%22In%20Progress%22%2C%20%22Reopened%22)${startDate ? `%20AND%20updated%20%3E%3D%20%22${startDate}%22` : ""}${endDate ? `%20AND%20updated%20%3C%3D%20%22${endDate}%22` : ""}%20AND%20updatedBy%20%3D%20%22${encodeURIComponent(reopenerName)}%22" class="btn btn-sm btn-primary" target="_blank">
                                 <i class="bi bi-box-arrow-up-right me-1"></i>Open in Jira
                             </a>
                         </div>
@@ -121,9 +131,38 @@ AND updatedBy = "${reopenerName}"</pre>
                 
                 // Create a project-specific endpoint to get real reopened bugs data
                 // For this demonstration, we'll fetch all reopened bugs in the project from the API
+                const detailsRequestId = `details_${requestId}`;
+                window.currentDetailsRequest = detailsRequestId;
+                
+                // Show loading indicator for details section only
+                outputHtml += `
+                    <div id="detailsLoadingIndicator" class="text-center my-3">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">Loading bug details...</span>
+                        </div>
+                        <p class="mt-2">Loading bug details...</p>
+                    </div>
+                `;
+                
+                // Set the initial HTML while we fetch details
+                document.getElementById('reopenedBugsList').innerHTML = outputHtml;
+                
                 fetch(`/api/project-reopened-bugs/${projectKey}?reopener=${encodeURIComponent(reopenerName)}${startDate ? `&start_date=${startDate}` : ''}${endDate ? `&end_date=${endDate}` : ''}`)
                 .then(response => response.json())
                 .then(bugsData => {
+                    // Check if this is still the current details request
+                    if (window.currentDetailsRequest !== detailsRequestId) {
+                        console.log('Ignoring outdated bug details response');
+                        return;
+                    }
+                    
+                    // Remove the loading indicator from the output HTML
+                    outputHtml = outputHtml.replace(/<div id="detailsLoadingIndicator".*?<\/div>\s*<p.*?<\/p>\s*<\/div>/s, '');
+                    
+                    // Always make sure the final HTML is set without any loading indicators
+                    const finalHtmlPrep = outputHtml.replace(/<div class="text-center my-3"><div class="spinner-border".*?<\/div>/gs, '')
+                                                   .replace(/<div class="spinner-border.*?<\/div>/gs, '');
+                    
                     if (bugsData.status === 'success' && bugsData.reopened_bugs && bugsData.reopened_bugs.length > 0) {
                         // Add a table with the reopened bugs
                         outputHtml += `
@@ -185,11 +224,25 @@ AND updatedBy = "${reopenerName}"</pre>
                     </div>
                     `;
                     
-                    // Set the final HTML
-                    document.getElementById('reopenedBugsList').innerHTML = outputHtml;
+                    // Set the final HTML - ensure all loading indicators are removed
+                    const finalHtml = outputHtml.replace(/<div id="detailsLoadingIndicator".*?<\/div>/gs, '')
+                                               .replace(/<div class="text-center my-3"><div class="spinner-border".*?<\/div>/gs, '')
+                                               .replace(/<div class="spinner-border.*?<\/div>/gs, '')
+                                               .replace(/<span class="spinner-border.*?<\/span>/gs, '');
+                    document.getElementById('reopenedBugsList').innerHTML = finalHtml;
                 })
                 .catch(error => {
+                    // Check if this is still the current request
+                    if (window.currentDetailsRequest !== detailsRequestId) {
+                        console.log('Ignoring error from outdated bug details request');
+                        return;
+                    }
+                    
                     console.error('Error fetching reopened bugs:', error);
+                    
+                    // Remove any loading indicator
+                    outputHtml = outputHtml.replace(/<div id="detailsLoadingIndicator".*?<\/div>\s*<p.*?<\/p>\s*<\/div>/s, '');
+                    
                     // Fallback to basic display in case the API endpoint isn't implemented
                     outputHtml += `
                         <div class="alert alert-warning">
@@ -200,8 +253,12 @@ AND updatedBy = "${reopenerName}"</pre>
                     </div>
                     `;
                     
-                    // Set the HTML without the detailed table
-                    document.getElementById('reopenedBugsList').innerHTML = outputHtml;
+                    // Set the HTML without the detailed table - ensure all loading indicators are removed
+                    const finalHtml = outputHtml.replace(/<div id="detailsLoadingIndicator".*?<\/div>/gs, '')
+                                               .replace(/<div class="text-center my-3"><div class="spinner-border".*?<\/div>/gs, '')
+                                               .replace(/<div class="spinner-border.*?<\/div>/gs, '')
+                                               .replace(/<span class="spinner-border.*?<\/span>/gs, '');
+                    document.getElementById('reopenedBugsList').innerHTML = finalHtml;
                 });
                 
             } else {
@@ -209,7 +266,14 @@ AND updatedBy = "${reopenerName}"</pre>
             }
         })
         .catch(error => {
+            // Check if this is still the current request
+            if (window.currentReopenRequest !== requestId) {
+                console.log('Ignoring error from outdated reopened bugs request');
+                return;
+            }
+            
             console.error('Error loading reopened bugs details:', error);
+            // Show error and ensure all loading indicators are removed
             document.getElementById('reopenedBugsList').innerHTML = '<div class="alert alert-danger">Error loading reopened bugs data.</div>';
         });
 }
