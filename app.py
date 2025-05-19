@@ -10,7 +10,7 @@ import io
 import pandas as pd
 
 # Import our modules
-from jira_api import JiraAPI
+from jira import JiraAPI
 from discord_notifications import DiscordNotifier
 from project_management import ProjectManager
 

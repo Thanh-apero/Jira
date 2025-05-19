@@ -50,7 +50,7 @@ except Exception as e:
 
 try:
     print("Testing local imports...")
-    from jira_api import JiraAPI
+    from jira import JiraAPI
     from discord_notifications import DiscordNotifier
     from project_management import ProjectManager
     print("✓ Local module imports successful")
