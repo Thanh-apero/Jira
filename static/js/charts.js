@@ -141,6 +141,15 @@ function updateBugStatusChart(bugsCount, reopenedBugsCount) {
         },
         options: {
             responsive: true,
+            onClick: function(event, elements) {
+                if (elements && elements.length > 0) {
+                    const index = elements[0].index;
+                    const reopenerName = this.data.labels[index];
+                    showReopenedBugsDetails(reopenerName);
+                    // Ngăn chặn hành vi mặc định để không reload trang
+                    event.native?.preventDefault?.();
+                }
+            },
             plugins: {
                 legend: {
                     position: 'right',

@@ -22,6 +22,12 @@ class StatisticsHandler:
             logger.error("Jira API credentials not configured")
             return {}
 
+        # Khôi phục kiểm tra cache
+        cache_key = f"stats_{project_key}_{start_date}_{end_date}_{participant}"
+        if self.core._is_cache_valid(cache_key) and cache_key in self.core._projects_cache:
+            logger.info(f"Using cached statistics for project {project_key}")
+            return self.core._projects_cache[cache_key]
+
         try:
             # Base JQL to get all issues in the project
             jql_parts = [f"project = {project_key}"]
@@ -58,7 +64,7 @@ class StatisticsHandler:
 
             if not all_issues:
                 logger.info(f"No issues found in project {project_key}")
-                return {
+                stats = {
                     'total_issues': 0,
                     'completed_tasks_count': 0,
                     'bugs_count': 0,
@@ -71,6 +77,8 @@ class StatisticsHandler:
                     'reopeners': [],
                     'assignee_bug_stats': []
                 }
+                self.core._projects_cache[cache_key] = stats
+                return stats
 
             # Count issues by status and type
             status_counts = {}
@@ -299,6 +307,7 @@ class StatisticsHandler:
 
                 logger.info(
                     f"Generated statistics for project {project_key}: {bugs_count} bugs, {reopened_bugs_count} reopened bugs")
+                self.core._projects_cache[cache_key] = statistics
                 return statistics
             except Exception as e:
                 logger.error(f"Error creating or caching statistics for project {project_key}: {str(e)}")
@@ -306,7 +315,7 @@ class StatisticsHandler:
                 logger.error(f"Traceback: {traceback.format_exc()}")
 
                 # Return a minimal valid statistics object
-                return {
+                minimal_stats = {
                     'total_issues': len(all_issues) if all_issues else 0,
                     'completed_tasks_count': completed_tasks_count,
                     'bugs_count': bugs_count,
@@ -319,6 +328,8 @@ class StatisticsHandler:
                     'reopeners': sorted_reopeners or [],
                     'assignee_bug_stats': sorted_assignees or []
                 }
+                self.core._projects_cache[cache_key] = minimal_stats
+                return minimal_stats
 
         except Exception as e:
             logger.error(f"Error generating project statistics: {str(e)}")
@@ -429,6 +440,12 @@ class StatisticsHandler:
             logger.error("Jira API credentials not configured")
             return []
 
+        # Khôi phục kiểm tra cache
+        cache_key = f"reopened_bugs_{project_key}_{start_date}_{end_date}_{participant}"
+        if self.core._is_cache_valid(cache_key) and cache_key in self.core._issues_cache:
+            logger.info(f"Using cached reopened bugs for project {project_key}")
+            return self.core._issues_cache[cache_key]
+
         try:
             # First, get all bugs in the project
             jql_parts = [
@@ -464,7 +481,7 @@ class StatisticsHandler:
 
             if not all_bugs:
                 logger.info(f"No bugs found in project {project_key}")
-                # Removed cache setting for empty result
+                self.core._issues_cache[cache_key] = []
                 return []
 
             logger.info(f"Found {len(all_bugs)} bugs in project {project_key}, checking for reopens...")
@@ -527,11 +544,13 @@ class StatisticsHandler:
 
             logger.info(f"Found {len(reopened_bugs)} reopened bugs out of {len(all_bugs)} bugs")
 
-            # Removed cache setting for reopened bugs result
+            # Cache the result
+            self.core._issues_cache[cache_key] = reopened_bugs
             return reopened_bugs
 
         except Exception as e:
             logger.error(f"Error searching for reopened bugs: {str(e)}")
+            self.core._issues_cache[cache_key] = []
             return []
 
     def find_reopened_bugs(self, project_keys):

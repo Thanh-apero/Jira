@@ -68,7 +68,6 @@ class IssueHandler:
 
     def search_issues(self, jql, fields=None, max_results=50, expand=None, use_cache=True, expiry=None):
         """Search for issues using JQL"""
-        use_cache = False
         cache_key = f"jql_{jql}_{fields}_{max_results}_{expand}"
 
         # Return from cache if valid and not for time-sensitive queries

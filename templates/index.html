@@ -2178,6 +2178,9 @@
     }
     
     function displayProjectStatistics(stats) {
+        // Store statistics data in global variable for reuse
+        window.currentStatisticsData = stats;
+        
         // Update overview numbers
         document.getElementById('statsTotalIssues').textContent = stats.total_issues;
         document.getElementById('statsCompletedTasks').textContent = stats.completed_tasks_count;

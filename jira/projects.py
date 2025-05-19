@@ -123,11 +123,18 @@ class ProjectHandler:
 
     def get_project_participants(self, project_key):
         """
-        Get all participants (users who have been assigned to issues) in a project
+        Get all participants (users who have created or commented or been assigned to issues) in a project
+        This can be used to populate assignee filters
         """
         if not self.core.is_configured():
             logger.error("Jira API credentials not configured")
             return []
+
+        # Khôi phục kiểm tra cache
+        cache_key = f"participants_{project_key}"
+        if self.core._is_cache_valid(cache_key) and cache_key in self.core._projects_cache:
+            logger.info(f"Using cached participants data for project {project_key}")
+            return self.core._projects_cache[cache_key]
 
         try:
             # OPTIMIZATION: Use a more efficient query with just the fields we need
@@ -171,6 +178,8 @@ class ProjectHandler:
             result = list(participants.values())
             result.sort(key=lambda x: x['issueCount'], reverse=True)
 
+            # Cache the result
+            self.core._set_cache('projects', cache_key, result, expiry=1800)
             logger.info(f"Found {len(result)} participants (assignees) in project {project_key}")
             return result
 
