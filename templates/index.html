@@ -192,6 +192,9 @@
                     <input type="hidden" name="check_type" value="all">
                     <button type="submit" class="btn btn-sm btn-outline-primary">Run Checks Now</button>
                 </form>
+                <button class="btn btn-sm btn-outline-success ms-1" onclick="openMultiGroupStatisticsModal()">
+                    <i class="bi bi-bar-chart-fill"></i> Multi-Group Stats
+                </button>
             </div>
         </div>
         <div class="card-body">
@@ -201,13 +204,19 @@
             <div class="accordion" id="projectsAccordion">
                 {% for category, projects in project_categories.items() %}
                 <div class="accordion-item mb-3">
-                    <h2 class="accordion-header" id="heading{{ category.replace(' ', '') }}">
-                        <button class="accordion-button" type="button"
+                    <h2 class="accordion-header d-flex align-items-center position-relative"
+                        id="heading{{ category.replace(' ', '') }}">
+                        <button class="accordion-button flex-grow-1" type="button"
                                 data-bs-toggle="collapse"
                                 data-bs-target="#collapse{{ category.replace(' ', '') }}"
                                 aria-expanded="true"
                                 aria-controls="collapse{{ category.replace(' ', '') }}">
                             {{ category }} ({{ projects|length }})
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-primary ms-2"
+                                onclick="openGroupStatsModal('{{ category }}'); event.stopPropagation();"
+                                title="View statistics for all projects in {{ category }}">
+                            <i class="bi bi-bar-chart-fill"></i> Group Stats
                         </button>
                     </h2>
                     <div id="collapse{{ category.replace(' ', '') }}"
@@ -359,6 +368,7 @@
             <div class="modal-header">
                 <h5 class="modal-title" id="projectStatsModalLabel">Project Statistics: <span
                         id="statsProjectName"></span></h5>
+                <div id="statsTypeIndicator" class="badge bg-secondary mb-2">Individual Project</div>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
@@ -434,8 +444,7 @@
                                 <h6 class="mb-0">Bug Reopeners</h6>
                             </div>
                             <div class="card-body">
-                                <div id="reopenersChart" class="chart-container"
-                                     style="position: relative; height:250px;">
+                                <div id="reopenersChart" class="chart-container" style="position: relative;">
                                     <canvas id="reopenersBarChart"></canvas>
                                 </div>
                             </div>
@@ -449,8 +458,7 @@
                                 <h6 class="mb-0">Bugs by Assignee</h6>
                             </div>
                             <div class="card-body">
-                                <div id="assigneeBugStatsChart" class="chart-container"
-                                     style="position: relative; height:250px;">
+                                <div id="assigneeBugStatsChart" class="chart-container" style="position: relative;">
                                     <canvas id="assigneeBugBarChart"></canvas>
                                 </div>
                             </div>
@@ -719,6 +727,56 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="/static/js/show_reopened_bugs.js"></script>
+
+<!-- Multi-Group Selection Modal -->
+<div class="modal fade" id="multiGroupModal" tabindex="-1" aria-labelledby="multiGroupModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="multiGroupModalLabel">Select Groups for Analysis</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <div class="form-text mb-2">Select multiple groups to analyze together</div>
+                    <div id="groupCheckboxContainer">
+                        {% if project_categories %}
+                        {% for category, projects in project_categories.items() %}
+                        <div class="form-check">
+                            <input class="form-check-input group-checkbox" type="checkbox" value="{{ category }}"
+                                   id="group-{{ category|replace(' ', '') }}">
+                            <label class="form-check-label" for="group-{{ category|replace(' ', '') }}">
+                                {{ category }} ({{ projects|length }} projects)
+                            </label>
+                        </div>
+                        {% endfor %}
+                        {% else %}
+                        <p class="text-muted">No project groups available</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Date range filters -->
+                <div class="row g-3 mt-2">
+                    <div class="col-md-6">
+                        <label for="multiGroupStartDate" class="form-label">Start Date</label>
+                        <input type="date" class="form-control" id="multiGroupStartDate">
+                    </div>
+                    <div class="col-md-6">
+                        <label for="multiGroupEndDate" class="form-label">End Date</label>
+                        <input type="date" class="form-control" id="multiGroupEndDate">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="generateMultiGroupStatistics()">Generate
+                    Statistics
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 <script>
     // Initialize chart objects as global variables
     let reopenersChart = null;
@@ -781,10 +839,8 @@
         const labels = [];
         const data = [];
         
-        // Limit to top 10 reopeners for readability
-        const limitedReopeners = reopeners.slice(0, 10);
-        
-        for (const [name, count] of limitedReopeners) {
+        // Use all reopeners
+        for (const [name, count] of reopeners) {
             labels.push(name);
             data.push(count);
         }
@@ -809,6 +865,7 @@
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 indexAxis: 'y',  // Horizontal bar chart
                 plugins: {
                     legend: {
@@ -840,6 +897,10 @@
                 }
             }
         });
+
+        // Adjust the height of the chart container based on number of reopeners
+        const chartHeight = Math.max(250, labels.length * 25); // Minimum 250px, 25px per reopener
+        document.getElementById('reopenersChart').style.height = `${chartHeight}px`;
         
         // Add explanatory text
         // Remove any pre-existing help text to avoid duplication
@@ -903,10 +964,8 @@
         const totalData = [];
         const reopenedData = [];
         
-        // Limit to top 10 assignees for readability
-        const limitedAssignees = assigneeBugStats.slice(0, 10);
-        
-        for (const [name, stats] of limitedAssignees) {
+        // Use all assignees
+        for (const [name, stats] of assigneeBugStats) {
             labels.push(name);
             totalData.push(stats.total);
             reopenedData.push(stats.reopened);
@@ -942,6 +1001,7 @@
             options: {
                 responsive: true,
                 indexAxis: 'y',  // Horizontal bar chart
+                maintainAspectRatio: false,
                 plugins: {
                     tooltip: {
                         callbacks: {
@@ -967,6 +1027,10 @@
                 }
             }
         });
+        
+        // Adjust the height of the chart container based on the number of assignees
+        const chartHeight = Math.max(250, assigneeBugStats.length * 25); // Minimum 250px, 25px per assignee
+        container.style.height = `${chartHeight}px`;
     }
 
     function generateChartColors(count, usePresetColors = false) {
@@ -1670,6 +1734,11 @@
         document.getElementById('statsProjectKey').value = projectKey;
         document.getElementById('statsProjectName').textContent = projectName;
         
+        // Set stats type indicator
+        const statsTypeIndicator = document.getElementById('statsTypeIndicator');
+        statsTypeIndicator.textContent = 'Individual Project';
+        statsTypeIndicator.className = 'badge bg-primary mb-2';
+        
         // Reset filters
         resetStatsFilters();
         
@@ -1679,6 +1748,183 @@
         
         // Load project statistics
         loadProjectStatistics(projectKey);
+    }
+    
+    // Function to open group statistics modal
+    function openGroupStatsModal(category) {
+        console.log("Opening group statistics modal for category:", category);
+        document.getElementById('statsProjectKey').value = '';
+        document.getElementById('statsProjectName').textContent = category + ' (Group)';
+        
+        // Set stats type indicator
+        const statsTypeIndicator = document.getElementById('statsTypeIndicator');
+        statsTypeIndicator.textContent = 'Group Statistics';
+        statsTypeIndicator.className = 'badge bg-success mb-2';
+        
+        // Reset filters
+        resetStatsFilters();
+        
+        // Show the modal
+        const modal = new bootstrap.Modal(document.getElementById('projectStatsModal'));
+        modal.show();
+        
+        // Load group statistics
+        loadGroupStatistics(category);
+    }
+    
+    // Function to open multi-group selection modal
+    function openMultiGroupStatisticsModal() {
+        console.log("Opening multi-group selection modal");
+        
+        // Reset checkboxes
+        const checkboxes = document.querySelectorAll('.group-checkbox');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = false;
+        });
+        
+        // Reset date filters
+        document.getElementById('multiGroupStartDate').value = '';
+        document.getElementById('multiGroupEndDate').value = '';
+        
+        // Open the modal
+        const modal = new bootstrap.Modal(document.getElementById('multiGroupModal'));
+        modal.show();
+    }
+    
+    // Function to generate statistics for multiple groups
+    function generateMultiGroupStatistics() {
+        console.log("Generating multi-group statistics");
+        
+        // Get selected groups
+        const checkboxes = document.querySelectorAll('.group-checkbox:checked');
+        const selectedGroups = Array.from(checkboxes).map(cb => cb.value);
+        
+        if (selectedGroups.length === 0) {
+            alert('Please select at least one group');
+            return;
+        }
+        
+        console.log("Selected groups:", selectedGroups);
+        
+        // Get date filters
+        const startDate = document.getElementById('multiGroupStartDate').value;
+        const endDate = document.getElementById('multiGroupEndDate').value;
+        
+        // Close the multi-group selection modal
+        const multiGroupModal = bootstrap.Modal.getInstance(document.getElementById('multiGroupModal'));
+        if (multiGroupModal) {
+            multiGroupModal.hide();
+        }
+        
+        // Update stats modal title and show it
+        document.getElementById('statsProjectKey').value = '';
+        document.getElementById('statsProjectName').textContent = `Multiple Groups (${selectedGroups.length})`;
+        
+        // Set stats type indicator
+        const statsTypeIndicator = document.getElementById('statsTypeIndicator');
+        statsTypeIndicator.textContent = 'Multi-Group Statistics';
+        statsTypeIndicator.className = 'badge bg-info mb-2';
+        
+        // Reset filters
+        resetStatsFilters();
+        
+        // Show the stats modal
+        const statsModal = new bootstrap.Modal(document.getElementById('projectStatsModal'));
+        statsModal.show();
+        
+        // Load multi-group statistics
+        loadMultiGroupStatistics(selectedGroups, startDate, endDate);
+    }
+    
+    // Function to load statistics for multiple groups
+    function loadMultiGroupStatistics(groups, startDate = null, endDate = null, participant = null) {
+        console.log("Loading multi-group statistics for groups:", groups, startDate, endDate, participant);
+        
+        // Create a unique request identifier
+        const requestId = `multi-group-${Date.now()}`;
+        currentStatsRequest = requestId;
+        
+        // Clear any previous data
+        if (reopenersChart) {
+            reopenersChart.destroy();
+            reopenersChart = null;
+        }
+        
+        if (assigneeBugChart) {
+            assigneeBugChart.destroy();
+            assigneeBugChart = null;
+        }
+        
+        // Clear charts containers and add spinners
+        document.getElementById('reopenersChart').innerHTML = '<canvas id="reopenersBarChart"></canvas><div class="text-center my-3" id="reopenersSpinnerContainer"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div></div>';
+        document.getElementById('assigneeBugStatsChart').innerHTML = '<canvas id="assigneeBugBarChart"></canvas><div class="text-center my-3" id="assigneeBugSpinnerContainer"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div></div>';
+        
+        // Show loading state for summary stats
+        document.getElementById('statsTotalIssues').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        document.getElementById('statsCompletedTasks').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        document.getElementById('statsReopenedBugs').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        document.getElementById('totalParticipants').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        
+        // Clear tables and show loading indicators
+        document.getElementById('participantsTable').getElementsByTagName('tbody')[0].innerHTML = 
+            '<tr><td colspan="6" class="text-center"><div class="spinner-border spinner-border-sm" role="status"></div> Loading participants...</td></tr>';
+        document.getElementById('recentIssuesTable').getElementsByTagName('tbody')[0].innerHTML = 
+            '<tr><td colspan="6" class="text-center"><div class="spinner-border spinner-border-sm" role="status"></div> Loading issues...</td></tr>';
+        
+        // Build URL with query parameters
+        let url = `/api/multi-group-statistics`;
+        const params = new URLSearchParams();
+        
+        // Add groups to URL encoded as JSON
+        params.append('groups', JSON.stringify(groups));
+        
+        if (startDate) params.append('start_date', startDate);
+        if (endDate) params.append('end_date', endDate);
+        if (participant) params.append('participant', participant);
+        
+        url += `?${params.toString()}`;
+        
+        // Fetch statistics
+        fetch(url)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                // Check if this is still the current request
+                if (currentStatsRequest !== requestId) {
+                    console.log('Ignoring outdated statistics response');
+                    return;
+                }
+                
+                if (data.status === 'success') {
+                    displayProjectStatistics(data.statistics);
+                    
+                    // Add group names to the modal title
+                    document.getElementById('statsProjectName').textContent = 
+                        `Multiple Groups (${groups.length}): ${groups.join(', ')}`;
+                    
+                    // Load participants for filter dropdown if not already loaded
+                    if (!participant && data.statistics.participants) {
+                        loadParticipantsForFilter('', data.statistics.participants);
+                    }
+                } else {
+                    console.error('Error loading multi-group statistics:', data.message);
+                    handleStatsLoadError('Failed to load multi-group statistics. Please try again.');
+                }
+            })
+            .catch(error => {
+                // Check if this is still the current request
+                if (currentStatsRequest !== requestId) {
+                    console.log('Ignoring error from outdated statistics request');
+                    return;
+                }
+                
+                console.error('Error loading multi-group statistics:', error);
+                handleStatsLoadError('An unexpected error occurred while loading multi-group statistics.');
+            });
     }
     
     function resetStatsFilters() {
@@ -1691,11 +1937,26 @@
     function applyStatsFilters() {
         console.log("Applying stats filters");
         const projectKey = document.getElementById('statsProjectKey').value;
+        const projectName = document.getElementById('statsProjectName').textContent;
         const startDate = document.getElementById('statsStartDate').value;
         const endDate = document.getElementById('statsEndDate').value;
         const participant = document.getElementById('statsParticipantFilter').value;
         
-        loadProjectStatistics(projectKey, startDate, endDate, participant);
+        if (projectName.includes('(Group)')) {
+            const category = projectName.replace(' (Group)', '');
+            loadGroupStatistics(category, startDate, endDate, participant);
+        } else if (projectName.includes('Multiple Groups')) {
+            // Extract group names from the modal title
+            const groupNamesString = projectName.match(/Multiple Groups \(\d+\): (.+)/);
+            if (groupNamesString && groupNamesString[1]) {
+                const groups = groupNamesString[1].split(', ');
+                loadMultiGroupStatistics(groups, startDate, endDate, participant);
+            } else {
+                alert('Error: Could not determine which groups to analyze.');
+            }
+        } else {
+            loadProjectStatistics(projectKey, startDate, endDate, participant);
+        }
     }
     
     // Charts for statistics
@@ -1777,6 +2038,86 @@
                 
                 console.error('Error loading project statistics:', error);
                 handleStatsLoadError('An unexpected error occurred while loading project statistics.');
+            });
+    }
+    
+    // Function to load statistics for a group (category) of projects
+    function loadGroupStatistics(category, startDate = null, endDate = null, participant = null) {
+        console.log("Loading group statistics for category:", category, startDate, endDate, participant);
+        
+        // Create a unique request identifier for this specific request
+        const requestId = `group-${category}-${Date.now()}`;
+        currentStatsRequest = requestId;
+        
+        // Clear any previous data completely
+        if (reopenersChart) {
+            reopenersChart.destroy();
+            reopenersChart = null;
+        }
+        
+        if (assigneeBugChart) {
+            assigneeBugChart.destroy();
+            assigneeBugChart = null;
+        }
+        
+        // Clear charts containers and add canvas + spinner
+        document.getElementById('reopenersChart').innerHTML = '<canvas id="reopenersBarChart"></canvas><div class="text-center my-3" id="reopenersSpinnerContainer"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div></div>';
+        document.getElementById('assigneeBugStatsChart').innerHTML = '<canvas id="assigneeBugBarChart"></canvas><div class="text-center my-3" id="assigneeBugSpinnerContainer"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div></div>';
+        
+        // Show loading state for summary stats
+        document.getElementById('statsTotalIssues').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        document.getElementById('statsCompletedTasks').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        document.getElementById('statsReopenedBugs').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        document.getElementById('totalParticipants').innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        
+        // Clear tables and show loading indicators
+        document.getElementById('participantsTable').getElementsByTagName('tbody')[0].innerHTML = 
+            '<tr><td colspan="6" class="text-center"><div class="spinner-border spinner-border-sm" role="status"></div> Loading participants...</td></tr>';
+        document.getElementById('recentIssuesTable').getElementsByTagName('tbody')[0].innerHTML = 
+            '<tr><td colspan="6" class="text-center"><div class="spinner-border spinner-border-sm" role="status"></div> Loading issues...</td></tr>';
+        
+        // Build URL with query parameters
+        let url = `/api/group-statistics/${encodeURIComponent(category)}`;
+        const params = new URLSearchParams();
+        if (startDate) params.append('start_date', startDate);
+        if (endDate) params.append('end_date', endDate);
+        if (participant) params.append('participant', participant);
+        
+        if (params.toString()) {
+            url += `?${params.toString()}`;
+        }
+        
+        // Fetch statistics
+        fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                // Check if this is still the current request
+                if (currentStatsRequest !== requestId) {
+                    console.log('Ignoring outdated statistics response');
+                    return; // Ignore this response as it's for an outdated request
+                }
+                
+                if (data.status === 'success') {
+                    displayProjectStatistics(data.statistics); // Use same display function
+                    
+                    // Load participants for filter dropdown if not already loaded
+                    if (!participant && data.statistics.participants) {
+                        loadParticipantsForFilter('', data.statistics.participants);
+                    }
+                } else {
+                    console.error('Error loading group statistics:', data.message);
+                    handleStatsLoadError('Failed to load group statistics. Please try again.');
+                }
+            })
+            .catch(error => {
+                // Check if this is still the current request
+                if (currentStatsRequest !== requestId) {
+                    console.log('Ignoring error from outdated statistics request');
+                    return; // Ignore this error as it's for an outdated request
+                }
+                
+                console.error('Error loading group statistics:', error);
+                handleStatsLoadError('An unexpected error occurred while loading group statistics.');
             });
     }
     

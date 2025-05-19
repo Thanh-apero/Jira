@@ -1141,6 +1141,144 @@ def get_project_statistics(project_key):
     })
 
 
+@app.route('/api/group-statistics/<category>', methods=['GET'])
+def get_group_statistics(category):
+    """
+    Get aggregated statistics for all projects in a specific category/group
+    """
+    if not jira_api.is_configured():
+        return jsonify({"status": "error", "message": "Jira API not configured"}), 500
+
+    # Get query parameters for filtering
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    participant = request.args.get('participant')
+
+    # Get all projects in this category
+    all_projects = jira_api.get_all_projects()
+    project_categories = project_manager.get_all_projects_by_category(all_projects)
+
+    # Get projects for this category
+    category_projects = project_categories.get(category, [])
+    if not category_projects:
+        return jsonify({
+            "status": "error",
+            "message": f"No projects found in category '{category}'"
+        }), 404
+
+    # Get project keys
+    project_keys = [project['key'] for project in category_projects]
+
+    # Initialize aggregated statistics
+    aggregated_stats = {
+        "total_issues": 0,
+        "completed_tasks_count": 0,
+        "reopened_bugs_count": 0,
+        "total_participants": 0,
+        "reopeners": [],  # Will be a list of [name, count] pairs
+        "assignee_bug_stats": [],  # Will be a list of [name, {total, reopened}] pairs
+        "participants": [],
+        "recent_issues": []
+    }
+
+    # Map to keep track of unique participants and their stats
+    participants_map = {}
+    reopeners_map = {}
+    assignee_bug_stats_map = {}
+    recent_issues = []
+
+    # Process each project in the category
+    for project_key in project_keys:
+        # Get statistics for this project
+        project_stats = jira_api.get_project_statistics(
+            project_key,
+            start_date=start_date,
+            end_date=end_date,
+            participant=participant
+        )
+
+        if not project_stats:
+            logger.warning(f"Could not get statistics for project {project_key}")
+            continue
+
+        # Aggregate numeric data
+        aggregated_stats["total_issues"] += project_stats.get("total_issues", 0)
+        aggregated_stats["completed_tasks_count"] += project_stats.get("completed_tasks_count", 0)
+        aggregated_stats["reopened_bugs_count"] += project_stats.get("reopened_bugs_count", 0)
+
+        # Aggregate reopeners data
+        for reopener, count in project_stats.get("reopeners", []):
+            if reopener in reopeners_map:
+                reopeners_map[reopener] += count
+            else:
+                reopeners_map[reopener] = count
+
+        # Aggregate assignee bug stats
+        for assignee, stats in project_stats.get("assignee_bug_stats", []):
+            if assignee in assignee_bug_stats_map:
+                assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
+                assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
+            else:
+                assignee_bug_stats_map[assignee] = {
+                    "total": stats.get("total", 0),
+                    "reopened": stats.get("reopened", 0)
+                }
+
+        # Aggregate participants data
+        for participant in project_stats.get("participants", []):
+            participant_key = participant.get("key")
+            if not participant_key:
+                continue
+
+            if participant_key in participants_map:
+                # Update counts
+                participants_map[participant_key]["assignedCount"] += participant.get("assignedCount", 0)
+                participants_map[participant_key]["reportedCount"] += participant.get("reportedCount", 0)
+                participants_map[participant_key]["commentCount"] += participant.get("commentCount", 0)
+                participants_map[participant_key]["issueCount"] += participant.get("issueCount", 0)
+            else:
+                # Add new participant
+                participants_map[participant_key] = participant.copy()
+
+        # Collect recent issues (up to 5 per project)
+        project_issues = project_stats.get("recent_issues", [])
+        if project_issues:
+            recent_issues.extend(project_issues[:5])
+
+    # Convert maps back to lists
+    aggregated_stats["reopeners"] = sorted(
+        [[name, count] for name, count in reopeners_map.items()],
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    aggregated_stats["assignee_bug_stats"] = sorted(
+        [[name, stats] for name, stats in assignee_bug_stats_map.items()],
+        key=lambda x: x[1]["total"],
+        reverse=True
+    )
+
+    aggregated_stats["participants"] = list(participants_map.values())
+    aggregated_stats["total_participants"] = len(aggregated_stats["participants"])
+
+    # Sort recent issues by updated date and take the most recent 20
+    aggregated_stats["recent_issues"] = sorted(
+        recent_issues,
+        key=lambda x: x.get("updated", ""),
+        reverse=True
+    )[:20]
+
+    return jsonify({
+        "status": "success",
+        "statistics": aggregated_stats,
+        "group_info": {
+            "name": category,
+            "project_count": len(project_keys),
+            "project_keys": project_keys
+        }
+    })
+
+
 @app.route('/api/project-participants/<project_key>', methods=['GET'])
 def get_project_participants(project_key):
     """
@@ -1189,6 +1327,165 @@ def get_project_reopened_bugs(project_key):
         "count": len(filtered_bugs),
         "project_key": project_key,
         "reopener": reopener
+    })
+
+
+@app.route('/api/multi-group-statistics', methods=['GET'])
+def get_multi_group_statistics():
+    """
+    Get aggregated statistics for multiple selected groups
+    """
+    if not jira_api.is_configured():
+        return jsonify({"status": "error", "message": "Jira API not configured"}), 500
+
+    # Get query parameters for filtering
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    participant = request.args.get('participant')
+
+    # Get the groups parameter (JSON encoded)
+    groups_json = request.args.get('groups')
+    if not groups_json:
+        return jsonify({
+            "status": "error",
+            "message": "No groups specified"
+        }), 400
+
+    try:
+        import json
+        groups = json.loads(groups_json)
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Invalid groups format: {str(e)}"
+        }), 400
+
+    # Get all projects
+    all_projects = jira_api.get_all_projects()
+    project_categories = project_manager.get_all_projects_by_category(all_projects)
+
+    # Collect all project keys from selected groups
+    all_project_keys = []
+    for group in groups:
+        category_projects = project_categories.get(group, [])
+        if category_projects:
+            group_project_keys = [project['key'] for project in category_projects]
+            all_project_keys.extend(group_project_keys)
+
+    if not all_project_keys:
+        return jsonify({
+            "status": "error",
+            "message": "No projects found in the selected groups"
+        }), 404
+
+    # Initialize aggregated statistics
+    aggregated_stats = {
+        "total_issues": 0,
+        "completed_tasks_count": 0,
+        "reopened_bugs_count": 0,
+        "total_participants": 0,
+        "reopeners": [],  # Will be a list of [name, count] pairs
+        "assignee_bug_stats": [],  # Will be a list of [name, {total, reopened}] pairs
+        "participants": [],
+        "recent_issues": []
+    }
+
+    # Maps to keep track of unique participants and their stats
+    participants_map = {}
+    reopeners_map = {}
+    assignee_bug_stats_map = {}
+    recent_issues = []
+
+    # Process each project
+    for project_key in all_project_keys:
+        # Get statistics for this project
+        project_stats = jira_api.get_project_statistics(
+            project_key,
+            start_date=start_date,
+            end_date=end_date,
+            participant=participant
+        )
+
+        if not project_stats:
+            logger.warning(f"Could not get statistics for project {project_key}")
+            continue
+
+        # Aggregate numeric data
+        aggregated_stats["total_issues"] += project_stats.get("total_issues", 0)
+        aggregated_stats["completed_tasks_count"] += project_stats.get("completed_tasks_count", 0)
+        aggregated_stats["reopened_bugs_count"] += project_stats.get("reopened_bugs_count", 0)
+
+        # Aggregate reopeners data
+        for reopener, count in project_stats.get("reopeners", []):
+            if reopener in reopeners_map:
+                reopeners_map[reopener] += count
+            else:
+                reopeners_map[reopener] = count
+
+        # Aggregate assignee bug stats
+        for assignee, stats in project_stats.get("assignee_bug_stats", []):
+            if assignee in assignee_bug_stats_map:
+                assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
+                assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
+            else:
+                assignee_bug_stats_map[assignee] = {
+                    "total": stats.get("total", 0),
+                    "reopened": stats.get("reopened", 0)
+                }
+
+        # Aggregate participants data
+        for participant in project_stats.get("participants", []):
+            participant_key = participant.get("key")
+            if not participant_key:
+                continue
+
+            if participant_key in participants_map:
+                # Update counts
+                participants_map[participant_key]["assignedCount"] += participant.get("assignedCount", 0)
+                participants_map[participant_key]["reportedCount"] += participant.get("reportedCount", 0)
+                participants_map[participant_key]["commentCount"] += participant.get("commentCount", 0)
+                participants_map[participant_key]["issueCount"] += participant.get("issueCount", 0)
+            else:
+                # Add new participant
+                participants_map[participant_key] = participant.copy()
+
+        # Collect recent issues (up to 5 per project)
+        project_issues = project_stats.get("recent_issues", [])
+        if project_issues:
+            recent_issues.extend(project_issues[:5])
+
+    # Convert maps back to lists
+    aggregated_stats["reopeners"] = sorted(
+        [[name, count] for name, count in reopeners_map.items()],
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    aggregated_stats["assignee_bug_stats"] = sorted(
+        [[name, stats] for name, stats in assignee_bug_stats_map.items()],
+        key=lambda x: x[1]["total"],
+        reverse=True
+    )
+
+    aggregated_stats["participants"] = list(participants_map.values())
+    aggregated_stats["total_participants"] = len(aggregated_stats["participants"])
+
+    # Sort recent issues by updated date and take the most recent 20
+    aggregated_stats["recent_issues"] = sorted(
+        recent_issues,
+        key=lambda x: x.get("updated", ""),
+        reverse=True
+    )[:20]
+
+    return jsonify({
+        "status": "success",
+        "statistics": aggregated_stats,
+        "group_info": {
+            "groups": groups,
+            "group_count": len(groups),
+            "project_count": len(all_project_keys),
+            "project_keys": all_project_keys
+        }
     })
 
 
