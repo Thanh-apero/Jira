@@ -185,10 +185,9 @@ class JiraCore:
 
     # Cache management methods
     def _is_cache_valid(self, cache_key):
-        """Check if cache is still valid"""
-        if cache_key not in self._cache_expiry:
-            return False
-        return time.time() < self._cache_expiry[cache_key]
+        """Check if a cache key is valid (not expired)"""
+        # Luôn trả về False để buộc tải dữ liệu mới
+        return False
 
     def _set_cache(self, cache_type, cache_key, data, expiry=None):
         """Set cache data with expiry time"""

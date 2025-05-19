@@ -1128,17 +1128,76 @@ def get_project_statistics(project_key):
     participant = request.args.get('participant')
 
     # Get project statistics from Jira API
-    statistics = jira_api.get_project_statistics(
-        project_key,
-        start_date=start_date,
-        end_date=end_date,
-        participant=participant
-    )
+    try:
+        statistics = jira_api.get_project_statistics(
+            project_key,
+            start_date=start_date,
+            end_date=end_date,
+            participant=participant
+        )
 
-    return jsonify({
-        "status": "success",
-        "statistics": statistics
-    })
+        # Ensure we always return valid data even if the statistics
+        if not statistics:
+            statistics = {
+                'total_issues': 0,
+                'completed_tasks_count': 0,
+                'bugs_count': 0,
+                'reopened_bugs_count': 0,
+                'status_counts': {},
+                'issue_types': {},
+                'recent_issues': [],
+                'participants': [],
+                'total_participants': 0,
+                'reopeners': [],
+                'assignee_bug_stats': []
+            }
+
+        # Ensure important fields always exist
+        if 'reopeners' not in statistics:
+            statistics['reopeners'] = []
+
+        if 'assignee_bug_stats' not in statistics:
+            statistics['assignee_bug_stats'] = []
+
+        if 'recent_issues' not in statistics:
+            statistics['recent_issues'] = []
+
+        # Add debug data for frontend
+        statistics['_debug'] = {
+            'has_error': False,
+            'processed_time': datetime.now().isoformat()
+        }
+
+        return jsonify({
+            "status": "success",
+            "statistics": statistics
+        })
+    except Exception as e:
+        logger.error(f"Error getting project statistics: {str(e)}")
+        # Return empty but valid statistics structure in case of error
+        empty_statistics = {
+            'total_issues': 0,
+            'completed_tasks_count': 0,
+            'bugs_count': 0,
+            'reopened_bugs_count': 0,
+            'status_counts': {},
+            'issue_types': {},
+            'recent_issues': [],
+            'participants': [],
+            'total_participants': 0,
+            'reopeners': [],
+            'assignee_bug_stats': [],
+            '_debug': {
+                'has_error': True,
+                'error_message': str(e),
+                'processed_time': datetime.now().isoformat()
+            }
+        }
+
+        return jsonify({
+            "status": "success",
+            "statistics": empty_statistics
+        })
 
 
 @app.route('/api/group-statistics/<category>', methods=['GET'])

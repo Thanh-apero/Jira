@@ -129,13 +129,6 @@ class ProjectHandler:
             logger.error("Jira API credentials not configured")
             return []
 
-        cache_key = f"participants_{project_key}"
-
-        # Return from cache if valid
-        if self.core._is_cache_valid(cache_key) and cache_key in self.core._projects_cache:
-            logger.info(f"Using cached participants data for project {project_key}")
-            return self.core._projects_cache[cache_key]
-
         try:
             # OPTIMIZATION: Use a more efficient query with just the fields we need
             # Also limit to recent issues to improve performance
@@ -177,9 +170,6 @@ class ProjectHandler:
             # Convert dictionary to list and sort by issue count
             result = list(participants.values())
             result.sort(key=lambda x: x['issueCount'], reverse=True)
-
-            # Cache the result for a longer time (1 hour) since participants don't change often
-            self.core._set_cache('projects', cache_key, result, expiry=3600)  # Increased from 30 to 60 minutes
 
             logger.info(f"Found {len(result)} participants (assignees) in project {project_key}")
             return result

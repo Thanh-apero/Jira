@@ -22,12 +22,6 @@ class StatisticsHandler:
             logger.error("Jira API credentials not configured")
             return {}
 
-        # Check cache first for quick response
-        cache_key = f"stats_{project_key}_{start_date}_{end_date}_{participant}"
-        if self.core._is_cache_valid(cache_key) and cache_key in self.core._projects_cache:
-            logger.info(f"Using cached statistics for project {project_key}")
-            return self.core._projects_cache[cache_key]
-
         try:
             # Base JQL to get all issues in the project
             jql_parts = [f"project = {project_key}"]
@@ -49,13 +43,34 @@ class StatisticsHandler:
             # This reduces the number of API calls significantly
             from jira.issues import IssueHandler
             issue_handler = IssueHandler(self.core)
-            all_issues = issue_handler.search_issues(
-                jql,
-                fields="key,summary,status,assignee,reporter,issuetype,priority,created,updated,comment",
-                max_results=500,  # Reasonable limit for statistics
-                use_cache=True,  # Use cache when possible
-                expiry=300  # Cache for 5 minutes
-            )
+
+            try:
+                all_issues = issue_handler.search_issues(
+                    jql,
+                    fields="key,summary,status,assignee,reporter,issuetype,priority,created,updated,comment",
+                    max_results=500,  # Reasonable limit for statistics
+                    use_cache=False,  # Always fetch fresh data
+                    expiry=300  # Cache for 5 minutes (not used due to use_cache=False)
+                )
+            except Exception as e:
+                logger.error(f"Error fetching issues for project {project_key} with JQL '{jql}': {str(e)}")
+                all_issues = []
+
+            if not all_issues:
+                logger.info(f"No issues found in project {project_key}")
+                return {
+                    'total_issues': 0,
+                    'completed_tasks_count': 0,
+                    'bugs_count': 0,
+                    'reopened_bugs_count': 0,
+                    'status_counts': {},
+                    'issue_types': {},
+                    'recent_issues': [],
+                    'participants': [],
+                    'total_participants': 0,
+                    'reopeners': [],
+                    'assignee_bug_stats': []
+                }
 
             # Count issues by status and type
             status_counts = {}
@@ -66,137 +81,249 @@ class StatisticsHandler:
 
             # Process all issues in a single pass (no additional API calls)
             for issue in all_issues:
+                if not issue:
+                    continue
+
                 fields = issue.get('fields', {})
+                if not fields:
+                    continue
 
-                # Get status and count
-                status = fields.get('status', {}).get('name', 'Unknown')
-                if status in status_counts:
-                    status_counts[status] += 1
-                else:
-                    status_counts[status] = 1
+                try:
+                    # Get status and count
+                    status_obj = fields.get('status')
+                    if status_obj is None:
+                        continue
 
-                # Check if completed
-                if status.lower() in ['done', 'closed', 'resolved', 'completed']:
-                    completed_tasks_count += 1
+                    status = status_obj.get('name', 'Unknown')
+                    if status in status_counts:
+                        status_counts[status] += 1
+                    else:
+                        status_counts[status] = 1
 
-                # Get issue type and count
-                issue_type = fields.get('issuetype', {}).get('name', 'Unknown')
-                if issue_type in issue_types:
-                    issue_types[issue_type] += 1
-                else:
-                    issue_types[issue_type] = 1
+                    # Check if completed
+                    if status.lower() in ['done', 'closed', 'resolved', 'completed']:
+                        completed_tasks_count += 1
 
-                # Count bugs
-                if issue_type.lower() == 'bug':
-                    bugs_count += 1
+                    # Get issue type and count
+                    issue_type_obj = fields.get('issuetype')
+                    if not issue_type_obj:
+                        continue
 
-                # Add to recent issues list
-                recent_issues.append({
-                    'key': issue.get('key'),
-                    'summary': fields.get('summary', 'No summary'),
-                    'status': status,
-                    'type': issue_type,
-                    'assignee': fields.get('assignee', {}).get('displayName') if fields.get('assignee') else None,
-                    'updated': fields.get('updated')
-                })
+                    issue_type = issue_type_obj.get('name', 'Unknown')
+                    if issue_type in issue_types:
+                        issue_types[issue_type] += 1
+                    else:
+                        issue_types[issue_type] = 1
+
+                    # Count bugs
+                    if issue_type.lower() == 'bug':
+                        bugs_count += 1
+
+                    # Add to recent issues list
+                    try:
+                        recent_issue = {
+                            'key': issue.get('key', 'Unknown'),
+                            'summary': fields.get('summary', 'No summary'),
+                            'status': status,
+                            'type': issue_type
+                        }
+
+                        # Safely add assignee
+                        assignee_obj = fields.get('assignee')
+                        if assignee_obj and isinstance(assignee_obj, dict):
+                            recent_issue['assignee'] = assignee_obj.get('displayName')
+                        else:
+                            recent_issue['assignee'] = None
+
+                        recent_issue['updated'] = fields.get('updated')
+                        recent_issues.append(recent_issue)
+                    except Exception as e:
+                        logger.error(f"Error processing recent issue: {str(e)}")
+                        continue
+                except Exception as e:
+                    logger.error(f"Error processing issue {issue.get('key', 'Unknown')}: {str(e)}")
+                    continue
 
             # Sort and limit recent issues
-            recent_issues.sort(key=lambda x: x.get('updated', ''), reverse=True)
-            recent_issues = recent_issues[:50]  # Limit to most recent 50
+            try:
+                if recent_issues:
+                    recent_issues.sort(key=lambda x: x.get('updated', ''), reverse=True)
+                    recent_issues = recent_issues[:50]  # Limit to most recent 50
+            except Exception as e:
+                logger.error(f"Error sorting recent issues: {str(e)}")
+                recent_issues = []
 
             # OPTIMIZATION: Get participants with caching
             # We don't need to recalculate this for every statistics request
             from jira.projects import ProjectHandler
             project_handler = ProjectHandler(self.core)
-            participants = project_handler.get_project_participants(project_key)
 
-            # OPTIMIZATION: For reopened bugs - use efficient detection and caching
-            # Only look at bugs, and cache the result
-            reopened_bugs_cache_key = f"reopened_bugs_{project_key}_{start_date}_{end_date}_{participant}"
+            try:
+                participants = project_handler.get_project_participants(project_key)
+                if participants is None:
+                    participants = []
+            except Exception as e:
+                logger.error(f"Error getting participants for project {project_key}: {str(e)}")
+                participants = []
 
-            if self.core._is_cache_valid(
-                    reopened_bugs_cache_key) and reopened_bugs_cache_key in self.core._issues_cache:
-                reopened_bugs = self.core._issues_cache[reopened_bugs_cache_key]
-                logger.info(f"Using cached reopened bugs for project {project_key}")
-            else:
-                # Get reopened bugs (filtered to bugs only to reduce API calls)
+            # Get reopened bugs (filtered to bugs only to reduce API calls)
+            try:
                 reopened_bugs = self.find_reopened_bugs_by_jql(
                     project_key,
                     start_date=start_date,
                     end_date=end_date,
                     participant=participant
                 )
-                # Cache reopened bugs result for 5 minutes
-                self.core._set_cache('issues', reopened_bugs_cache_key, reopened_bugs, expiry=300)
 
-            reopened_bugs_count = len(reopened_bugs)
+                if reopened_bugs is None:
+                    reopened_bugs = []
+            except Exception as e:
+                logger.error(f"Error finding reopened bugs for project {project_key}: {str(e)}")
+                reopened_bugs = []
+
+            reopened_bugs_count = len(reopened_bugs) if reopened_bugs else 0
 
             # NEW: Gather statistics about who reopened bugs
             reopener_stats = {}
-            for bug in reopened_bugs:
-                reopener = bug.get('reopen_by', 'Unknown')
-                if reopener in reopener_stats:
-                    reopener_stats[reopener] += 1
-                else:
-                    reopener_stats[reopener] = 1
+
+            try:
+                for bug in reopened_bugs:
+                    if not bug:
+                        continue  # Skip None values
+
+                    reopener = bug.get('reopen_by', 'Unknown')
+                    if reopener in reopener_stats:
+                        reopener_stats[reopener] += 1
+                    else:
+                        reopener_stats[reopener] = 1
+            except Exception as e:
+                logger.error(f"Error gathering reopener stats: {str(e)}")
 
             # Sort reopeners by number of reopens (most first)
-            sorted_reopeners = sorted(
-                [(name, count) for name, count in reopener_stats.items()],
-                key=lambda x: x[1],
-                reverse=True
-            )
+            try:
+                sorted_reopeners = sorted(
+                    [(name, count) for name, count in reopener_stats.items()],
+                    key=lambda x: x[1],
+                    reverse=True
+                )
+            except Exception as e:
+                logger.error(f"Error sorting reopeners: {str(e)}")
+                sorted_reopeners = []
 
             # NEW: Gather statistics about bugs by assignee
             assignee_bug_stats = {}
-            for bug in all_issues:
-                if bug.get('fields', {}).get('issuetype', {}).get('name', '').lower() == 'bug':
-                    assignee = bug.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned')
-                    if assignee in assignee_bug_stats:
-                        assignee_bug_stats[assignee]['total'] += 1
-                    else:
-                        assignee_bug_stats[assignee] = {'total': 1, 'reopened': 0}
+
+            try:
+                for issue in all_issues:
+                    if not issue:
+                        continue
+
+                    fields = issue.get('fields', {})
+                    if not fields:
+                        continue
+
+                    issue_type_obj = fields.get('issuetype')
+                    if not issue_type_obj:
+                        continue
+
+                    issue_type = issue_type_obj.get('name', 'Unknown')
+
+                    if issue_type and issue_type.lower() == 'bug':
+                        assignee_obj = fields.get('assignee')
+                        assignee = assignee_obj.get('displayName', 'Unassigned') if assignee_obj else 'Unassigned'
+
+                        if assignee in assignee_bug_stats:
+                            assignee_bug_stats[assignee]['total'] += 1
+                        else:
+                            assignee_bug_stats[assignee] = {'total': 1, 'reopened': 0}
+            except Exception as e:
+                logger.error(f"Error processing bug assignee stats: {str(e)}")
 
             # Add reopened bugs to assignee stats
-            for bug in reopened_bugs:
-                assignee = bug.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned')
-                if assignee in assignee_bug_stats:
-                    assignee_bug_stats[assignee]['reopened'] += 1
-                else:
-                    assignee_bug_stats[assignee] = {'total': 1, 'reopened': 1}
+            try:
+                for bug in reopened_bugs:
+                    if not bug:
+                        continue  # Skip None values
+
+                    fields = bug.get('fields', {})
+                    if not fields:
+                        logger.warning(f"Bug {bug.get('key', 'unknown')} has no fields, skipping for assignee stats")
+                        continue  # Skip bugs with no fields
+
+                    try:
+                        assignee = fields.get('assignee', {})
+                        # Extra check for assignee object
+                        if not assignee:
+                            assignee_name = 'Unassigned'
+                        else:
+                            assignee_name = assignee.get('displayName', 'Unassigned') if assignee else 'Unassigned'
+
+                        if assignee_name in assignee_bug_stats:
+                            assignee_bug_stats[assignee_name]['reopened'] += 1
+                        else:
+                            assignee_bug_stats[assignee_name] = {'total': 1, 'reopened': 1}
+                    except Exception as e:
+                        logger.error(f"Error processing bug for assignee stats: {str(e)}")
+                        logger.error(
+                            f"Bug data: {bug.get('key')}, fields available: {list(fields.keys()) if fields else 'None'}")
+            except Exception as e:
+                logger.error(f"Error processing reopened bugs for assignee stats: {str(e)}")
 
             # Sort assignees by total bugs (most first)
-            sorted_assignees = sorted(
-                [(name, stats) for name, stats in assignee_bug_stats.items()],
-                key=lambda x: x[1]['total'],
-                reverse=True
-            )
+            try:
+                sorted_assignees = sorted(
+                    [(name, stats) for name, stats in assignee_bug_stats.items()],
+                    key=lambda x: x[1]['total'],
+                    reverse=True
+                )
+            except Exception as e:
+                logger.error(f"Error sorting assignee stats: {str(e)}")
+                sorted_assignees = []
 
             # Build statistics response
-            statistics = {
-                'total_issues': len(all_issues),
-                'completed_tasks_count': completed_tasks_count,
-                'bugs_count': bugs_count,
-                'reopened_bugs_count': reopened_bugs_count,
-                'status_counts': status_counts,
-                'issue_types': issue_types,
-                'recent_issues': recent_issues,
-                'participants': participants,
-                'total_participants': len(participants),
-                # New statistics
-                'reopeners': sorted_reopeners,
-                'assignee_bug_stats': sorted_assignees
-            }
+            try:
+                statistics = {
+                    'total_issues': len(all_issues),
+                    'completed_tasks_count': completed_tasks_count,
+                    'bugs_count': bugs_count,
+                    'reopened_bugs_count': reopened_bugs_count,
+                    'status_counts': status_counts,
+                    'issue_types': issue_types,
+                    'recent_issues': recent_issues,
+                    'participants': participants,
+                    'total_participants': len(participants) if participants else 0,
+                    # New statistics
+                    'reopeners': sorted_reopeners,
+                    'assignee_bug_stats': sorted_assignees
+                }
 
-            # Cache the whole statistics result for 2 minutes
-            self.core._set_cache('projects', cache_key, statistics, expiry=120)
+                logger.info(
+                    f"Generated statistics for project {project_key}: {bugs_count} bugs, {reopened_bugs_count} reopened bugs")
+                return statistics
+            except Exception as e:
+                logger.error(f"Error creating or caching statistics for project {project_key}: {str(e)}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
 
-            logger.info(
-                f"Generated statistics for project {project_key}: {bugs_count} bugs, {reopened_bugs_count} reopened bugs")
-            return statistics
+                # Return a minimal valid statistics object
+                return {
+                    'total_issues': len(all_issues) if all_issues else 0,
+                    'completed_tasks_count': completed_tasks_count,
+                    'bugs_count': bugs_count,
+                    'reopened_bugs_count': reopened_bugs_count,
+                    'status_counts': status_counts or {},
+                    'issue_types': issue_types or {},
+                    'recent_issues': [],
+                    'participants': [],
+                    'total_participants': 0,
+                    'reopeners': sorted_reopeners or [],
+                    'assignee_bug_stats': sorted_assignees or []
+                }
 
         except Exception as e:
             logger.error(f"Error generating project statistics: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return {}
 
     def test_get_status_transitions(self, project_key, limit=10):
@@ -302,12 +429,6 @@ class StatisticsHandler:
             logger.error("Jira API credentials not configured")
             return []
 
-        # Check cache for reopened bugs
-        cache_key = f"reopen_bugs_{project_key}_{start_date}_{end_date}_{participant}"
-        if self.core._is_cache_valid(cache_key) and cache_key in self.core._issues_cache:
-            logger.info(f"Using cached reopened bugs for project {project_key}")
-            return self.core._issues_cache[cache_key]
-
         try:
             # First, get all bugs in the project
             jql_parts = [
@@ -343,8 +464,7 @@ class StatisticsHandler:
 
             if not all_bugs:
                 logger.info(f"No bugs found in project {project_key}")
-                # Cache empty result for a short time
-                self.core._set_cache('issues', cache_key, [], expiry=60)
+                # Removed cache setting for empty result
                 return []
 
             logger.info(f"Found {len(all_bugs)} bugs in project {project_key}, checking for reopens...")
@@ -357,6 +477,9 @@ class StatisticsHandler:
             to_states = ["todo", "to do", "in progress", "reopened", "request", "backlog", "open"]
 
             for bug in all_bugs:
+                if not bug:
+                    continue  # Skip None values
+
                 issue_key = bug.get('key')
                 changelog = bug.get('changelog', {}).get('histories', [])  # Get changelog directly from expanded data
 
@@ -404,8 +527,7 @@ class StatisticsHandler:
 
             logger.info(f"Found {len(reopened_bugs)} reopened bugs out of {len(all_bugs)} bugs")
 
-            # Cache the result for 5 minutes
-            self.core._set_cache('issues', cache_key, reopened_bugs, expiry=300)
+            # Removed cache setting for reopened bugs result
             return reopened_bugs
 
         except Exception as e:
