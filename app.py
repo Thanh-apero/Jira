@@ -124,27 +124,54 @@ def check_reopened_bugs():
 
     logger.info(f"Found total of {len(reopened_bugs)} reopened bugs to notify about")
 
+    notifications_sent = 0
     for bug in reopened_bugs:
         issue_key = bug.get('key')
         project_key = bug.get('fields', {}).get('project', {}).get('key')
+
+        # Check if reopen event happened within our time range
+        reopen_time_str = bug.get('reopen_time')
+        if not reopen_time_str:
+            logger.warning(f"Bug {issue_key} marked as reopened but has no reopen_time, skipping")
+            continue
+
+        try:
+            # Parse the reopen timestamp and check if it's within our time range
+            reopen_time = datetime.strptime(reopen_time_str.split('T')[0], "%Y-%m-%d")
+            reopen_date_str = reopen_time.strftime("%Y-%m-%d")
+
+            if reopen_date_str < yesterday or reopen_date_str > today:
+                logger.info(
+                    f"Bug {issue_key} was reopened on {reopen_date_str}, outside our time range {yesterday}-{today}, skipping")
+                continue
+        except Exception as e:
+            logger.error(f"Error parsing reopen time for bug {issue_key}: {str(e)}")
+            continue
+
+        # Create a unique key for this specific reopen event
+        # This prevents duplicate notifications for the same reopen event
+        from_status = bug.get('reopen_from', 'Unknown')
+        to_status = bug.get('reopen_to', 'Unknown')
+        reopened_by = bug.get('reopen_by', 'Unknown')
+        notification_key = f"{issue_key}-reopen-{reopen_time_str}"
+
+        # Check if we've already notified about this specific reopen event
+        if jira_api.was_issue_notified('bugs', notification_key):
+            logger.info(f"Bug {issue_key} reopen event from {reopen_time_str} already notified, skipping")
+            continue
 
         # Get project-specific webhook URL if available
         webhook_url = project_manager.get_project_webhook(project_key, discord_notifier.default_webhook_url)
 
         # Add transition info if available
-        from_status = bug.get('reopen_from', 'Unknown')
-        to_status = bug.get('reopen_to', 'Unknown')
         transition_info = f"from '{from_status}' to '{to_status}'"
-
-        # Get who reopened the bug
-        reopened_by = bug.get('reopen_by', 'Unknown')
 
         # Add reopen details for the Discord notifier
         bug['reopen_details'] = {
             'from': from_status,
             'to': to_status,
-            'by': reopened_by, 'when': bug.get('reopen_time', ''),
-            'when': bug.get('reopen_time', '')
+            'by': reopened_by,
+            'when': reopen_time_str
         }
 
         # Send notification with transition info
@@ -152,7 +179,10 @@ def check_reopened_bugs():
 
         # Mark as processed if notification was sent
         if result:
-            jira_api.mark_issue_notified('bugs', issue_key, f"reopened: {transition_info} by {reopened_by}")
+            jira_api.mark_issue_notified('bugs', notification_key, f"reopened: {transition_info} by {reopened_by}")
+            notifications_sent += 1
+
+    logger.info(f"Sent {notifications_sent} new reopen notifications out of {len(reopened_bugs)} reopened bugs found")
 
 
 def check_new_issues():
