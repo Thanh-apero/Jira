@@ -1431,6 +1431,14 @@ def get_multi_group_statistics():
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
     participant = request.args.get('participant')
+    
+    # Get the incremental loading parameter (optional)
+    page = request.args.get('page', '1')
+    try:
+        page = int(page)
+    except ValueError:
+        page = 1
+    page_size = 3  # Number of projects to process per page
 
     # Get the groups parameter (JSON encoded)
     groups_json = request.args.get('groups')
@@ -1449,6 +1457,31 @@ def get_multi_group_statistics():
             "message": f"Invalid groups format: {str(e)}"
         }), 400
 
+    # Create a cache key based on the request parameters
+    import hashlib
+    cache_key = f"multi_group_stats_{groups_json}_{start_date}_{end_date}_{participant}"
+    cache_key_hash = hashlib.md5(cache_key.encode()).hexdigest()
+    
+    # Check if we have a complete cached result
+    cache_file = os.path.join(os.path.dirname(__file__), 'cache', f"{cache_key_hash}_complete.json")
+    os.makedirs(os.path.join(os.path.dirname(__file__), 'cache'), exist_ok=True)
+    
+    # If we have a complete cached result and it's not too old (less than 30 minutes)
+    if os.path.exists(cache_file):
+        try:
+            file_modified_time = os.path.getmtime(cache_file)
+            current_time = time.time()
+            # If the cache is less than 30 minutes old
+            if current_time - file_modified_time < 1800:  # 30 minutes in seconds
+                with open(cache_file, 'r') as f:
+                    cached_data = json.load(f)
+                logger.info(f"Using complete cached result for multi-group statistics")
+                return jsonify(cached_data)
+            else:
+                logger.info(f"Cache is too old, regenerating multi-group statistics")
+        except Exception as e:
+            logger.error(f"Error reading cache file: {str(e)}")
+    
     # Get all projects
     all_projects = jira_api.get_all_projects()
     project_categories = project_manager.get_all_projects_by_category(all_projects)
@@ -1466,7 +1499,10 @@ def get_multi_group_statistics():
             "status": "error",
             "message": "No projects found in the selected groups"
         }), 404
-
+        
+    # Check if we have partial cached results
+    partial_cache_file = os.path.join(os.path.dirname(__file__), 'cache', f"{cache_key_hash}_partial.json")
+    
     # Initialize aggregated statistics
     aggregated_stats = {
         "total_issues": 0,
@@ -1481,15 +1517,63 @@ def get_multi_group_statistics():
         "status_counts": {},
         "issue_types": {}
     }
-
+    
     # Maps to keep track of unique participants and their stats
     participants_map = {}
     reopeners_map = {}
     assignee_bug_stats_map = {}
     recent_issues = []
+    processed_projects = []
+    
+    # If we have partial cached results, load them
+    if os.path.exists(partial_cache_file):
+        try:
+            with open(partial_cache_file, 'r') as f:
+                partial_data = json.load(f)
+                
+            # Load the partial statistics
+            if 'statistics' in partial_data:
+                partial_stats = partial_data['statistics']
+                aggregated_stats["total_issues"] = partial_stats.get("total_issues", 0)
+                aggregated_stats["completed_tasks_count"] = partial_stats.get("completed_tasks_count", 0)
+                aggregated_stats["reopened_bugs_count"] = partial_stats.get("reopened_bugs_count", 0)
+                aggregated_stats["bugs_count"] = partial_stats.get("bugs_count", 0)
+                aggregated_stats["status_counts"] = partial_stats.get("status_counts", {})
+                aggregated_stats["issue_types"] = partial_stats.get("issue_types", {})
+                
+                # Load the maps
+                if 'maps' in partial_data:
+                    maps_data = partial_data['maps']
+                    participants_map = maps_data.get('participants_map', {})
+                    reopeners_map = maps_data.get('reopeners_map', {})
+                    assignee_bug_stats_map = maps_data.get('assignee_bug_stats_map', {})
+                    recent_issues = maps_data.get('recent_issues', [])
+                    processed_projects = maps_data.get('processed_projects', [])
+                    
+            logger.info(f"Loaded partial cached data with {len(processed_projects)} processed projects")
+        except Exception as e:
+            logger.error(f"Error loading partial cache: {str(e)}")
 
-    # Process each project
-    for project_key in all_project_keys:
+    # Calculate which projects to process in this request
+    remaining_projects = [p for p in all_project_keys if p not in processed_projects]
+    total_projects = len(all_project_keys)
+    processed_count = len(processed_projects)
+    remaining_count = len(remaining_projects)
+    
+    # Calculate start and end indices for this page
+    start_idx = 0
+    end_idx = min(page_size, remaining_count)
+    
+    # If specific page was requested, calculate the correct slice
+    if page > 1:
+        start_idx = (page - 1) * page_size
+        end_idx = min(start_idx + page_size, remaining_count)
+        
+    # Get the projects to process in this request
+    projects_to_process = remaining_projects[start_idx:end_idx] if remaining_projects else []
+    
+    # Process each project in this batch
+    for project_key in projects_to_process:
         try:
             # Get statistics for this project
             project_stats = jira_api.get_project_statistics(
@@ -1673,6 +1757,39 @@ def get_multi_group_statistics():
         logger.error(f"Error sorting assignee bug stats: {str(e)}")
         aggregated_stats["assignee_bug_stats"] = []
 
+    # Update processed projects list
+    processed_projects.extend(projects_to_process)
+    
+    # Save partial results to cache
+    try:
+        # Prepare data for caching
+        maps_data = {
+            'participants_map': participants_map,
+            'reopeners_map': reopeners_map,
+            'assignee_bug_stats_map': assignee_bug_stats_map,
+            'recent_issues': recent_issues,
+            'processed_projects': processed_projects
+        }
+        
+        partial_cache_data = {
+            'statistics': aggregated_stats,
+            'maps': maps_data,
+            'meta': {
+                'processed_count': len(processed_projects),
+                'total_count': len(all_project_keys),
+                'timestamp': time.time()
+            }
+        }
+        
+        # Write to partial cache file
+        with open(partial_cache_file, 'w') as f:
+            json.dump(partial_cache_data, f)
+            
+        logger.info(f"Saved partial results to cache, processed {len(processed_projects)} of {len(all_project_keys)} projects")
+    except Exception as e:
+        logger.error(f"Error saving partial cache: {str(e)}")
+    
+    # Convert maps to final format for response
     aggregated_stats["participants"] = list(participants_map.values())
     aggregated_stats["total_participants"] = len(aggregated_stats["participants"])
 
@@ -1686,6 +1803,32 @@ def get_multi_group_statistics():
     except Exception as e:
         logger.error(f"Error sorting recent issues: {str(e)}")
         aggregated_stats["recent_issues"] = []
+        
+    # Check if we've processed all projects
+    all_processed = len(processed_projects) >= len(all_project_keys)
+    
+    # If all projects are processed, save the complete result to cache
+    if all_processed:
+        try:
+            complete_result = {
+                "status": "success",
+                "statistics": aggregated_stats,
+                "group_info": {
+                    "groups": groups,
+                    "group_count": len(groups),
+                    "project_count": len(all_project_keys),
+                    "project_keys": all_project_keys,
+                    "complete": True
+                }
+            }
+            
+            # Write to complete cache file
+            with open(cache_file, 'w') as f:
+                json.dump(complete_result, f)
+                
+            logger.info(f"Saved complete results to cache")
+        except Exception as e:
+            logger.error(f"Error saving complete cache: {str(e)}")
 
     return jsonify({
         "status": "success",
@@ -1694,7 +1837,12 @@ def get_multi_group_statistics():
             "groups": groups,
             "group_count": len(groups),
             "project_count": len(all_project_keys),
-            "project_keys": all_project_keys
+            "project_keys": all_project_keys,
+            "processed_projects": processed_projects,
+            "processed_count": len(processed_projects),
+            "total_count": len(all_project_keys),
+            "complete": all_processed,
+            "next_page": page + 1 if not all_processed else None
         }
     })
 
