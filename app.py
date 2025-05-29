@@ -1466,15 +1466,6 @@ def get_multi_group_statistics():
             "status": "error",
             "message": "No projects found in the selected groups"
         }), 404
-        
-    # Limit the number of projects to process to avoid timeouts
-    # If there are too many projects, we'll only process the first 10
-    # to ensure the request completes within a reasonable time
-    if len(all_project_keys) > 10:
-        logger.warning(f"Limiting multi-group statistics to first 10 projects out of {len(all_project_keys)}")
-        limited_project_keys = all_project_keys[:10]
-    else:
-        limited_project_keys = all_project_keys
 
     # Initialize aggregated statistics
     aggregated_stats = {
@@ -1496,30 +1487,17 @@ def get_multi_group_statistics():
     reopeners_map = {}
     assignee_bug_stats_map = {}
     recent_issues = []
-    
-    # Set a timeout for each project to prevent the entire request from hanging
-    import threading
-    import time
-    
-    # Process each project with a timeout
-    for project_key in limited_project_keys:
-        start_time = time.time()
+
+    # Process each project
+    for project_key in all_project_keys:
         try:
-            # Get statistics for this project with a timeout of 15 seconds per project
-            # to ensure the entire request doesn't hang on a single slow project
+            # Get statistics for this project
             project_stats = jira_api.get_project_statistics(
                 project_key,
                 start_date=start_date,
                 end_date=end_date,
                 participant=participant
             )
-            
-            # Check if we've spent too much time on this project
-            if time.time() - start_time > 15:
-                logger.warning(f"Project {project_key} statistics took too long, skipping detailed processing")
-                # Just add basic stats and continue to next project
-                aggregated_stats["total_issues"] += project_stats.get("total_issues", 0)
-                continue
 
             if not project_stats:
                 logger.warning(f"Could not get statistics for project {project_key}")
@@ -1548,41 +1526,88 @@ def get_multi_group_statistics():
             # Aggregate reopeners data
             try:
                 reopeners_list = project_stats.get("reopeners", [])
-                for reopener_item in reopeners_list:
-                    if isinstance(reopener_item, list) and len(reopener_item) == 2:
-                        reopener, count = reopener_item
-                        if reopener in reopeners_map:
-                            reopeners_map[reopener] += count
-                        else:
-                            reopeners_map[reopener] = count
+                # Log the structure for debugging
+                logger.info(f"Reopeners data structure for project {project_key}: {reopeners_list}")
+                
+                # Handle different possible structures
+                if reopeners_list:
+                    if isinstance(reopeners_list, list):
+                        for reopener_item in reopeners_list:
+                            # Case 1: [name, count] format
+                            if isinstance(reopener_item, list) and len(reopener_item) == 2:
+                                reopener, count = reopener_item
+                                if reopener in reopeners_map:
+                                    reopeners_map[reopener] += count
+                                else:
+                                    reopeners_map[reopener] = count
+                            # Case 2: dict format
+                            elif isinstance(reopener_item, dict) and 'name' in reopener_item and 'count' in reopener_item:
+                                reopener = reopener_item['name']
+                                count = reopener_item['count']
+                                if reopener in reopeners_map:
+                                    reopeners_map[reopener] += count
+                                else:
+                                    reopeners_map[reopener] = count
+                    # Case 3: Direct dict format {name: count, ...}
+                    elif isinstance(reopeners_list, dict):
+                        for reopener, count in reopeners_list.items():
+                            if reopener in reopeners_map:
+                                reopeners_map[reopener] += count
+                            else:
+                                reopeners_map[reopener] = count
             except Exception as e:
                 logger.error(f"Error processing reopeners data for project {project_key}: {str(e)}")
 
             # Aggregate assignee bug stats
             try:
                 assignee_stats_list = project_stats.get("assignee_bug_stats", [])
-                for assignee_item in assignee_stats_list:
-                    if isinstance(assignee_item, list) and len(assignee_item) == 2:
-                        assignee, stats = assignee_item
-                        if assignee in assignee_bug_stats_map:
-                            assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
-                            assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
-                        else:
-                            assignee_bug_stats_map[assignee] = {
-                                "total": stats.get("total", 0),
-                                "reopened": stats.get("reopened", 0)
-                            }
+                # Log the structure for debugging
+                logger.info(f"Assignee bug stats structure for project {project_key}: {assignee_stats_list}")
+                
+                # Handle different possible structures
+                if assignee_stats_list:
+                    if isinstance(assignee_stats_list, list):
+                        for assignee_item in assignee_stats_list:
+                            # Case 1: [name, stats] format
+                            if isinstance(assignee_item, list) and len(assignee_item) == 2:
+                                assignee, stats = assignee_item
+                                if assignee in assignee_bug_stats_map:
+                                    assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
+                                    assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
+                                else:
+                                    assignee_bug_stats_map[assignee] = {
+                                        "total": stats.get("total", 0),
+                                        "reopened": stats.get("reopened", 0)
+                                    }
+                            # Case 2: dict format with name and stats
+                            elif isinstance(assignee_item, dict) and 'name' in assignee_item and 'stats' in assignee_item:
+                                assignee = assignee_item['name']
+                                stats = assignee_item['stats']
+                                if assignee in assignee_bug_stats_map:
+                                    assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
+                                    assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
+                                else:
+                                    assignee_bug_stats_map[assignee] = {
+                                        "total": stats.get("total", 0),
+                                        "reopened": stats.get("reopened", 0)
+                                    }
+                    # Case 3: Direct dict format {name: {stats}, ...}
+                    elif isinstance(assignee_stats_list, dict):
+                        for assignee, stats in assignee_stats_list.items():
+                            if assignee in assignee_bug_stats_map:
+                                assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
+                                assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
+                            else:
+                                assignee_bug_stats_map[assignee] = {
+                                    "total": stats.get("total", 0),
+                                    "reopened": stats.get("reopened", 0)
+                                }
             except Exception as e:
                 logger.error(f"Error processing assignee bug stats for project {project_key}: {str(e)}")
 
-            # Aggregate participants data - limit to 100 participants max
+            # Aggregate participants data
             try:
-                participant_count = 0
                 for participant in project_stats.get("participants", []):
-                    participant_count += 1
-                    if participant_count > 100:  # Limit to prevent memory issues
-                        break
-                        
                     participant_key = participant.get("key")
                     if not participant_key:
                         continue
@@ -1599,67 +1624,69 @@ def get_multi_group_statistics():
             except Exception as e:
                 logger.error(f"Error processing participants data for project {project_key}: {str(e)}")
 
-            # Collect recent issues (up to 3 per project to limit data size)
+            # Collect recent issues (up to 5 per project)
             try:
                 project_issues = project_stats.get("recent_issues", [])
                 if project_issues:
-                    recent_issues.extend(project_issues[:3])
+                    recent_issues.extend(project_issues[:5])
             except Exception as e:
                 logger.error(f"Error processing recent issues for project {project_key}: {str(e)}")
                 
         except Exception as e:
             logger.error(f"Error processing statistics for project {project_key}: {str(e)}")
             continue
-            
-        # Check if the overall processing is taking too long
-        if time.time() - start_time > 30:  # If we've spent more than 30 seconds total
-            logger.warning("Multi-group statistics taking too long, stopping further processing")
-            break
 
-    # Convert maps back to lists - limit sizes to prevent large responses
+    # Convert maps back to lists
     try:
-        # Limit to top 20 reopeners
-        reopeners_sorted = sorted(
-            [[name, count] for name, count in reopeners_map.items()],
-            key=lambda x: x[1],
-            reverse=True
-        )
-        aggregated_stats["reopeners"] = reopeners_sorted[:20] if len(reopeners_sorted) > 20 else reopeners_sorted
+        # Log the reopeners map for debugging
+        logger.info(f"Final reopeners map: {reopeners_map}")
+        
+        # Only create the sorted list if we have data
+        if reopeners_map:
+            aggregated_stats["reopeners"] = sorted(
+                [[name, count] for name, count in reopeners_map.items()],
+                key=lambda x: x[1],
+                reverse=True
+            )
+        else:
+            logger.warning("No reopeners data found across all projects")
+            aggregated_stats["reopeners"] = []
     except Exception as e:
         logger.error(f"Error sorting reopeners: {str(e)}")
         aggregated_stats["reopeners"] = []
 
     try:
-        # Limit to top 20 assignees
-        assignees_sorted = sorted(
-            [[name, stats] for name, stats in assignee_bug_stats_map.items()],
-            key=lambda x: x[1]["total"],
-            reverse=True
-        )
-        aggregated_stats["assignee_bug_stats"] = assignees_sorted[:20] if len(assignees_sorted) > 20 else assignees_sorted
+        # Log the assignee bug stats map for debugging
+        logger.info(f"Final assignee bug stats map: {assignee_bug_stats_map}")
+        
+        # Only create the sorted list if we have data
+        if assignee_bug_stats_map:
+            aggregated_stats["assignee_bug_stats"] = sorted(
+                [[name, stats] for name, stats in assignee_bug_stats_map.items()],
+                key=lambda x: x[1]["total"],
+                reverse=True
+            )
+        else:
+            logger.warning("No assignee bug stats found across all projects")
+            aggregated_stats["assignee_bug_stats"] = []
     except Exception as e:
         logger.error(f"Error sorting assignee bug stats: {str(e)}")
         aggregated_stats["assignee_bug_stats"] = []
 
-    # Limit participants to 100 max
-    participants_list = list(participants_map.values())
-    aggregated_stats["participants"] = participants_list[:100] if len(participants_list) > 100 else participants_list
+    aggregated_stats["participants"] = list(participants_map.values())
     aggregated_stats["total_participants"] = len(aggregated_stats["participants"])
 
-    # Sort recent issues by updated date and take the most recent 15
+    # Sort recent issues by updated date and take the most recent 20
     try:
         aggregated_stats["recent_issues"] = sorted(
             recent_issues,
             key=lambda x: x.get("updated", ""),
             reverse=True
-        )[:15]
+        )[:20]
     except Exception as e:
         logger.error(f"Error sorting recent issues: {str(e)}")
         aggregated_stats["recent_issues"] = []
 
-    # Add a note if we limited the projects
-    was_limited = len(limited_project_keys) < len(all_project_keys)
-    
     return jsonify({
         "status": "success",
         "statistics": aggregated_stats,
@@ -1667,10 +1694,7 @@ def get_multi_group_statistics():
             "groups": groups,
             "group_count": len(groups),
             "project_count": len(all_project_keys),
-            "project_keys": limited_project_keys,
-            "limited": was_limited,
-            "processed_count": len(limited_project_keys),
-            "total_count": len(all_project_keys)
+            "project_keys": all_project_keys
         }
     })
 
