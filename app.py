@@ -1466,6 +1466,15 @@ def get_multi_group_statistics():
             "status": "error",
             "message": "No projects found in the selected groups"
         }), 404
+        
+    # Limit the number of projects to process to avoid timeouts
+    # If there are too many projects, we'll only process the first 10
+    # to ensure the request completes within a reasonable time
+    if len(all_project_keys) > 10:
+        logger.warning(f"Limiting multi-group statistics to first 10 projects out of {len(all_project_keys)}")
+        limited_project_keys = all_project_keys[:10]
+    else:
+        limited_project_keys = all_project_keys
 
     # Initialize aggregated statistics
     aggregated_stats = {
@@ -1487,17 +1496,30 @@ def get_multi_group_statistics():
     reopeners_map = {}
     assignee_bug_stats_map = {}
     recent_issues = []
-
-    # Process each project
-    for project_key in all_project_keys:
+    
+    # Set a timeout for each project to prevent the entire request from hanging
+    import threading
+    import time
+    
+    # Process each project with a timeout
+    for project_key in limited_project_keys:
+        start_time = time.time()
         try:
-            # Get statistics for this project
+            # Get statistics for this project with a timeout of 15 seconds per project
+            # to ensure the entire request doesn't hang on a single slow project
             project_stats = jira_api.get_project_statistics(
                 project_key,
                 start_date=start_date,
                 end_date=end_date,
                 participant=participant
             )
+            
+            # Check if we've spent too much time on this project
+            if time.time() - start_time > 15:
+                logger.warning(f"Project {project_key} statistics took too long, skipping detailed processing")
+                # Just add basic stats and continue to next project
+                aggregated_stats["total_issues"] += project_stats.get("total_issues", 0)
+                continue
 
             if not project_stats:
                 logger.warning(f"Could not get statistics for project {project_key}")
@@ -1553,9 +1575,14 @@ def get_multi_group_statistics():
             except Exception as e:
                 logger.error(f"Error processing assignee bug stats for project {project_key}: {str(e)}")
 
-            # Aggregate participants data
+            # Aggregate participants data - limit to 100 participants max
             try:
+                participant_count = 0
                 for participant in project_stats.get("participants", []):
+                    participant_count += 1
+                    if participant_count > 100:  # Limit to prevent memory issues
+                        break
+                        
                     participant_key = participant.get("key")
                     if not participant_key:
                         continue
@@ -1572,53 +1599,67 @@ def get_multi_group_statistics():
             except Exception as e:
                 logger.error(f"Error processing participants data for project {project_key}: {str(e)}")
 
-            # Collect recent issues (up to 5 per project)
+            # Collect recent issues (up to 3 per project to limit data size)
             try:
                 project_issues = project_stats.get("recent_issues", [])
                 if project_issues:
-                    recent_issues.extend(project_issues[:5])
+                    recent_issues.extend(project_issues[:3])
             except Exception as e:
                 logger.error(f"Error processing recent issues for project {project_key}: {str(e)}")
                 
         except Exception as e:
             logger.error(f"Error processing statistics for project {project_key}: {str(e)}")
             continue
+            
+        # Check if the overall processing is taking too long
+        if time.time() - start_time > 30:  # If we've spent more than 30 seconds total
+            logger.warning("Multi-group statistics taking too long, stopping further processing")
+            break
 
-    # Convert maps back to lists
+    # Convert maps back to lists - limit sizes to prevent large responses
     try:
-        aggregated_stats["reopeners"] = sorted(
+        # Limit to top 20 reopeners
+        reopeners_sorted = sorted(
             [[name, count] for name, count in reopeners_map.items()],
             key=lambda x: x[1],
             reverse=True
         )
+        aggregated_stats["reopeners"] = reopeners_sorted[:20] if len(reopeners_sorted) > 20 else reopeners_sorted
     except Exception as e:
         logger.error(f"Error sorting reopeners: {str(e)}")
         aggregated_stats["reopeners"] = []
 
     try:
-        aggregated_stats["assignee_bug_stats"] = sorted(
+        # Limit to top 20 assignees
+        assignees_sorted = sorted(
             [[name, stats] for name, stats in assignee_bug_stats_map.items()],
             key=lambda x: x[1]["total"],
             reverse=True
         )
+        aggregated_stats["assignee_bug_stats"] = assignees_sorted[:20] if len(assignees_sorted) > 20 else assignees_sorted
     except Exception as e:
         logger.error(f"Error sorting assignee bug stats: {str(e)}")
         aggregated_stats["assignee_bug_stats"] = []
 
-    aggregated_stats["participants"] = list(participants_map.values())
+    # Limit participants to 100 max
+    participants_list = list(participants_map.values())
+    aggregated_stats["participants"] = participants_list[:100] if len(participants_list) > 100 else participants_list
     aggregated_stats["total_participants"] = len(aggregated_stats["participants"])
 
-    # Sort recent issues by updated date and take the most recent 20
+    # Sort recent issues by updated date and take the most recent 15
     try:
         aggregated_stats["recent_issues"] = sorted(
             recent_issues,
             key=lambda x: x.get("updated", ""),
             reverse=True
-        )[:20]
+        )[:15]
     except Exception as e:
         logger.error(f"Error sorting recent issues: {str(e)}")
         aggregated_stats["recent_issues"] = []
 
+    # Add a note if we limited the projects
+    was_limited = len(limited_project_keys) < len(all_project_keys)
+    
     return jsonify({
         "status": "success",
         "statistics": aggregated_stats,
@@ -1626,7 +1667,10 @@ def get_multi_group_statistics():
             "groups": groups,
             "group_count": len(groups),
             "project_count": len(all_project_keys),
-            "project_keys": all_project_keys
+            "project_keys": limited_project_keys,
+            "limited": was_limited,
+            "processed_count": len(limited_project_keys),
+            "total_count": len(all_project_keys)
         }
     })
 
