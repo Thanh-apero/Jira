@@ -1472,11 +1472,14 @@ def get_multi_group_statistics():
         "total_issues": 0,
         "completed_tasks_count": 0,
         "reopened_bugs_count": 0,
+        "bugs_count": 0,
         "total_participants": 0,
         "reopeners": [],  # Will be a list of [name, count] pairs
         "assignee_bug_stats": [],  # Will be a list of [name, {total, reopened}] pairs
         "participants": [],
-        "recent_issues": []
+        "recent_issues": [],
+        "status_counts": {},
+        "issue_types": {}
     }
 
     # Maps to keep track of unique participants and their stats
@@ -1487,84 +1490,134 @@ def get_multi_group_statistics():
 
     # Process each project
     for project_key in all_project_keys:
-        # Get statistics for this project
-        project_stats = jira_api.get_project_statistics(
-            project_key,
-            start_date=start_date,
-            end_date=end_date,
-            participant=participant
-        )
+        try:
+            # Get statistics for this project
+            project_stats = jira_api.get_project_statistics(
+                project_key,
+                start_date=start_date,
+                end_date=end_date,
+                participant=participant
+            )
 
-        if not project_stats:
-            logger.warning(f"Could not get statistics for project {project_key}")
-            continue
-
-        # Aggregate numeric data
-        aggregated_stats["total_issues"] += project_stats.get("total_issues", 0)
-        aggregated_stats["completed_tasks_count"] += project_stats.get("completed_tasks_count", 0)
-        aggregated_stats["reopened_bugs_count"] += project_stats.get("reopened_bugs_count", 0)
-
-        # Aggregate reopeners data
-        for reopener, count in project_stats.get("reopeners", []):
-            if reopener in reopeners_map:
-                reopeners_map[reopener] += count
-            else:
-                reopeners_map[reopener] = count
-
-        # Aggregate assignee bug stats
-        for assignee, stats in project_stats.get("assignee_bug_stats", []):
-            if assignee in assignee_bug_stats_map:
-                assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
-                assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
-            else:
-                assignee_bug_stats_map[assignee] = {
-                    "total": stats.get("total", 0),
-                    "reopened": stats.get("reopened", 0)
-                }
-
-        # Aggregate participants data
-        for participant in project_stats.get("participants", []):
-            participant_key = participant.get("key")
-            if not participant_key:
+            if not project_stats:
+                logger.warning(f"Could not get statistics for project {project_key}")
                 continue
 
-            if participant_key in participants_map:
-                # Update counts
-                participants_map[participant_key]["assignedCount"] += participant.get("assignedCount", 0)
-                participants_map[participant_key]["reportedCount"] += participant.get("reportedCount", 0)
-                participants_map[participant_key]["commentCount"] += participant.get("commentCount", 0)
-                participants_map[participant_key]["issueCount"] += participant.get("issueCount", 0)
-            else:
-                # Add new participant
-                participants_map[participant_key] = participant.copy()
+            # Aggregate numeric data
+            aggregated_stats["total_issues"] += project_stats.get("total_issues", 0)
+            aggregated_stats["completed_tasks_count"] += project_stats.get("completed_tasks_count", 0)
+            aggregated_stats["reopened_bugs_count"] += project_stats.get("reopened_bugs_count", 0)
+            aggregated_stats["bugs_count"] += project_stats.get("bugs_count", 0)
+            
+            # Aggregate status counts
+            for status, count in project_stats.get("status_counts", {}).items():
+                if status in aggregated_stats["status_counts"]:
+                    aggregated_stats["status_counts"][status] += count
+                else:
+                    aggregated_stats["status_counts"][status] = count
+                    
+            # Aggregate issue types
+            for issue_type, count in project_stats.get("issue_types", {}).items():
+                if issue_type in aggregated_stats["issue_types"]:
+                    aggregated_stats["issue_types"][issue_type] += count
+                else:
+                    aggregated_stats["issue_types"][issue_type] = count
 
-        # Collect recent issues (up to 5 per project)
-        project_issues = project_stats.get("recent_issues", [])
-        if project_issues:
-            recent_issues.extend(project_issues[:5])
+            # Aggregate reopeners data
+            try:
+                reopeners_list = project_stats.get("reopeners", [])
+                for reopener_item in reopeners_list:
+                    if isinstance(reopener_item, list) and len(reopener_item) == 2:
+                        reopener, count = reopener_item
+                        if reopener in reopeners_map:
+                            reopeners_map[reopener] += count
+                        else:
+                            reopeners_map[reopener] = count
+            except Exception as e:
+                logger.error(f"Error processing reopeners data for project {project_key}: {str(e)}")
+
+            # Aggregate assignee bug stats
+            try:
+                assignee_stats_list = project_stats.get("assignee_bug_stats", [])
+                for assignee_item in assignee_stats_list:
+                    if isinstance(assignee_item, list) and len(assignee_item) == 2:
+                        assignee, stats = assignee_item
+                        if assignee in assignee_bug_stats_map:
+                            assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
+                            assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
+                        else:
+                            assignee_bug_stats_map[assignee] = {
+                                "total": stats.get("total", 0),
+                                "reopened": stats.get("reopened", 0)
+                            }
+            except Exception as e:
+                logger.error(f"Error processing assignee bug stats for project {project_key}: {str(e)}")
+
+            # Aggregate participants data
+            try:
+                for participant in project_stats.get("participants", []):
+                    participant_key = participant.get("key")
+                    if not participant_key:
+                        continue
+
+                    if participant_key in participants_map:
+                        # Update counts
+                        participants_map[participant_key]["assignedCount"] += participant.get("assignedCount", 0)
+                        participants_map[participant_key]["reportedCount"] += participant.get("reportedCount", 0)
+                        participants_map[participant_key]["commentCount"] += participant.get("commentCount", 0)
+                        participants_map[participant_key]["issueCount"] += participant.get("issueCount", 0)
+                    else:
+                        # Add new participant
+                        participants_map[participant_key] = participant.copy()
+            except Exception as e:
+                logger.error(f"Error processing participants data for project {project_key}: {str(e)}")
+
+            # Collect recent issues (up to 5 per project)
+            try:
+                project_issues = project_stats.get("recent_issues", [])
+                if project_issues:
+                    recent_issues.extend(project_issues[:5])
+            except Exception as e:
+                logger.error(f"Error processing recent issues for project {project_key}: {str(e)}")
+                
+        except Exception as e:
+            logger.error(f"Error processing statistics for project {project_key}: {str(e)}")
+            continue
 
     # Convert maps back to lists
-    aggregated_stats["reopeners"] = sorted(
-        [[name, count] for name, count in reopeners_map.items()],
-        key=lambda x: x[1],
-        reverse=True
-    )
+    try:
+        aggregated_stats["reopeners"] = sorted(
+            [[name, count] for name, count in reopeners_map.items()],
+            key=lambda x: x[1],
+            reverse=True
+        )
+    except Exception as e:
+        logger.error(f"Error sorting reopeners: {str(e)}")
+        aggregated_stats["reopeners"] = []
 
-    aggregated_stats["assignee_bug_stats"] = sorted(
-        [[name, stats] for name, stats in assignee_bug_stats_map.items()],
-        key=lambda x: x[1]["total"],
-        reverse=True
-    )
+    try:
+        aggregated_stats["assignee_bug_stats"] = sorted(
+            [[name, stats] for name, stats in assignee_bug_stats_map.items()],
+            key=lambda x: x[1]["total"],
+            reverse=True
+        )
+    except Exception as e:
+        logger.error(f"Error sorting assignee bug stats: {str(e)}")
+        aggregated_stats["assignee_bug_stats"] = []
 
     aggregated_stats["participants"] = list(participants_map.values())
     aggregated_stats["total_participants"] = len(aggregated_stats["participants"])
 
     # Sort recent issues by updated date and take the most recent 20
-    aggregated_stats["recent_issues"] = sorted(
-        recent_issues,
-        key=lambda x: x.get("updated", ""),
-        reverse=True
-    )[:20]
+    try:
+        aggregated_stats["recent_issues"] = sorted(
+            recent_issues,
+            key=lambda x: x.get("updated", ""),
+            reverse=True
+        )[:20]
+    except Exception as e:
+        logger.error(f"Error sorting recent issues: {str(e)}")
+        aggregated_stats["recent_issues"] = []
 
     return jsonify({
         "status": "success",
@@ -1614,7 +1667,7 @@ if __name__ == '__main__':
     static_dir.mkdir(exist_ok=True)
 
     # Use PORT from environment or default to 5003
-    port = int(os.getenv('PORT', 5003))
+    port = int(os.getenv('PORT', 5001))
     # Use HOST from environment or default to 0.0.0.0
     host = os.getenv('HOST', '0.0.0.0')
     # Start the Flask application
