@@ -8,6 +8,9 @@ from pathlib import Path
 import atexit
 import io
 import pandas as pd
+import time
+import concurrent.futures
+from threading import Lock
 
 # Import our modules
 from jira import JiraAPI
@@ -1422,7 +1425,7 @@ def get_project_reopened_bugs(project_key):
 @app.route('/api/multi-group-statistics', methods=['GET'])
 def get_multi_group_statistics():
     """
-    Get aggregated statistics for multiple selected groups
+    Get aggregated statistics for multiple selected groups using multi-threading
     """
     if not jira_api.is_configured():
         return jsonify({"status": "error", "message": "Jira API not configured"}), 500
@@ -1432,14 +1435,6 @@ def get_multi_group_statistics():
     end_date = request.args.get('end_date')
     participant = request.args.get('participant')
     
-    # Get the incremental loading parameter (optional)
-    page = request.args.get('page', '1')
-    try:
-        page = int(page)
-    except ValueError:
-        page = 1
-    page_size = 3  # Number of projects to process per page
-
     # Get the groups parameter (JSON encoded)
     groups_json = request.args.get('groups')
     if not groups_json:
@@ -1463,8 +1458,9 @@ def get_multi_group_statistics():
     cache_key_hash = hashlib.md5(cache_key.encode()).hexdigest()
     
     # Check if we have a complete cached result
-    cache_file = os.path.join(os.path.dirname(__file__), 'cache', f"{cache_key_hash}_complete.json")
-    os.makedirs(os.path.join(os.path.dirname(__file__), 'cache'), exist_ok=True)
+    cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
+    cache_file = os.path.join(cache_dir, f"{cache_key_hash}_complete.json")
+    os.makedirs(cache_dir, exist_ok=True)
     
     # If we have a complete cached result and it's not too old (less than 30 minutes)
     if os.path.exists(cache_file):
@@ -1499,10 +1495,7 @@ def get_multi_group_statistics():
             "status": "error",
             "message": "No projects found in the selected groups"
         }), 404
-        
-    # Check if we have partial cached results
-    partial_cache_file = os.path.join(os.path.dirname(__file__), 'cache', f"{cache_key_hash}_partial.json")
-    
+
     # Initialize aggregated statistics
     aggregated_stats = {
         "total_issues": 0,
@@ -1510,72 +1503,28 @@ def get_multi_group_statistics():
         "reopened_bugs_count": 0,
         "bugs_count": 0,
         "total_participants": 0,
-        "reopeners": [],  # Will be a list of [name, count] pairs
-        "assignee_bug_stats": [],  # Will be a list of [name, {total, reopened}] pairs
-        "participants": [],
-        "recent_issues": [],
         "status_counts": {},
         "issue_types": {}
     }
+
+    # Maps to keep track of unique participants and their stats with thread-safe locks
+    participants_lock = Lock()
+    reopeners_lock = Lock()
+    assignee_bug_lock = Lock()
+    recent_issues_lock = Lock()
+    aggregated_stats_lock = Lock()
+    status_counts_lock = Lock()
+    issue_types_lock = Lock()
     
-    # Maps to keep track of unique participants and their stats
     participants_map = {}
     reopeners_map = {}
     assignee_bug_stats_map = {}
     recent_issues = []
-    processed_projects = []
-    
-    # If we have partial cached results, load them
-    if os.path.exists(partial_cache_file):
-        try:
-            with open(partial_cache_file, 'r') as f:
-                partial_data = json.load(f)
-                
-            # Load the partial statistics
-            if 'statistics' in partial_data:
-                partial_stats = partial_data['statistics']
-                aggregated_stats["total_issues"] = partial_stats.get("total_issues", 0)
-                aggregated_stats["completed_tasks_count"] = partial_stats.get("completed_tasks_count", 0)
-                aggregated_stats["reopened_bugs_count"] = partial_stats.get("reopened_bugs_count", 0)
-                aggregated_stats["bugs_count"] = partial_stats.get("bugs_count", 0)
-                aggregated_stats["status_counts"] = partial_stats.get("status_counts", {})
-                aggregated_stats["issue_types"] = partial_stats.get("issue_types", {})
-                
-                # Load the maps
-                if 'maps' in partial_data:
-                    maps_data = partial_data['maps']
-                    participants_map = maps_data.get('participants_map', {})
-                    reopeners_map = maps_data.get('reopeners_map', {})
-                    assignee_bug_stats_map = maps_data.get('assignee_bug_stats_map', {})
-                    recent_issues = maps_data.get('recent_issues', [])
-                    processed_projects = maps_data.get('processed_projects', [])
-                    
-            logger.info(f"Loaded partial cached data with {len(processed_projects)} processed projects")
-        except Exception as e:
-            logger.error(f"Error loading partial cache: {str(e)}")
 
-    # Calculate which projects to process in this request
-    remaining_projects = [p for p in all_project_keys if p not in processed_projects]
-    total_projects = len(all_project_keys)
-    processed_count = len(processed_projects)
-    remaining_count = len(remaining_projects)
-    
-    # Calculate start and end indices for this page
-    start_idx = 0
-    end_idx = min(page_size, remaining_count)
-    
-    # If specific page was requested, calculate the correct slice
-    if page > 1:
-        start_idx = (page - 1) * page_size
-        end_idx = min(start_idx + page_size, remaining_count)
-        
-    # Get the projects to process in this request
-    projects_to_process = remaining_projects[start_idx:end_idx] if remaining_projects else []
-    
-    # Process each project in this batch
-    for project_key in projects_to_process:
+    # Function to process a single project in a thread
+    def process_project(project_key):
         try:
-            # Get statistics for this project
+            # Get statistics for this project using the existing single-project logic
             project_stats = jira_api.get_project_statistics(
                 project_key,
                 start_date=start_date,
@@ -1585,209 +1534,185 @@ def get_multi_group_statistics():
 
             if not project_stats:
                 logger.warning(f"Could not get statistics for project {project_key}")
-                continue
+                return None
 
-            # Aggregate numeric data
-            aggregated_stats["total_issues"] += project_stats.get("total_issues", 0)
-            aggregated_stats["completed_tasks_count"] += project_stats.get("completed_tasks_count", 0)
-            aggregated_stats["reopened_bugs_count"] += project_stats.get("reopened_bugs_count", 0)
-            aggregated_stats["bugs_count"] += project_stats.get("bugs_count", 0)
-            
-            # Aggregate status counts
-            for status, count in project_stats.get("status_counts", {}).items():
-                if status in aggregated_stats["status_counts"]:
-                    aggregated_stats["status_counts"][status] += count
-                else:
-                    aggregated_stats["status_counts"][status] = count
-                    
-            # Aggregate issue types
-            for issue_type, count in project_stats.get("issue_types", {}).items():
-                if issue_type in aggregated_stats["issue_types"]:
-                    aggregated_stats["issue_types"][issue_type] += count
-                else:
-                    aggregated_stats["issue_types"][issue_type] = count
+            project_result = {
+                "total_issues": project_stats.get("total_issues", 0),
+                "completed_tasks_count": project_stats.get("completed_tasks_count", 0),
+                "reopened_bugs_count": project_stats.get("reopened_bugs_count", 0),
+                "bugs_count": project_stats.get("bugs_count", 0),
+                "status_counts": project_stats.get("status_counts", {}),
+                "issue_types": project_stats.get("issue_types", {}),
+                "reopeners": project_stats.get("reopeners", []),
+                "assignee_bug_stats": project_stats.get("assignee_bug_stats", []),
+                "participants": project_stats.get("participants", []),
+                "recent_issues": project_stats.get("recent_issues", [])[:5] if project_stats.get(
+                    "recent_issues") else []
+            }
 
-            # Aggregate reopeners data
-            try:
-                reopeners_list = project_stats.get("reopeners", [])
-                # Log the structure for debugging
-                logger.info(f"Reopeners data structure for project {project_key}: {reopeners_list}")
-                
-                # Handle different possible structures
-                if reopeners_list:
-                    if isinstance(reopeners_list, list):
-                        for reopener_item in reopeners_list:
-                            # Case 1: [name, count] format
-                            if isinstance(reopener_item, list) and len(reopener_item) == 2:
-                                reopener, count = reopener_item
-                                if reopener in reopeners_map:
-                                    reopeners_map[reopener] += count
-                                else:
-                                    reopeners_map[reopener] = count
-                            # Case 2: dict format
-                            elif isinstance(reopener_item, dict) and 'name' in reopener_item and 'count' in reopener_item:
-                                reopener = reopener_item['name']
-                                count = reopener_item['count']
-                                if reopener in reopeners_map:
-                                    reopeners_map[reopener] += count
-                                else:
-                                    reopeners_map[reopener] = count
-                    # Case 3: Direct dict format {name: count, ...}
-                    elif isinstance(reopeners_list, dict):
-                        for reopener, count in reopeners_list.items():
-                            if reopener in reopeners_map:
-                                reopeners_map[reopener] += count
-                            else:
-                                reopeners_map[reopener] = count
-            except Exception as e:
-                logger.error(f"Error processing reopeners data for project {project_key}: {str(e)}")
+            return project_result
 
-            # Aggregate assignee bug stats
-            try:
-                assignee_stats_list = project_stats.get("assignee_bug_stats", [])
-                # Log the structure for debugging
-                logger.info(f"Assignee bug stats structure for project {project_key}: {assignee_stats_list}")
-                
-                # Handle different possible structures
-                if assignee_stats_list:
-                    if isinstance(assignee_stats_list, list):
-                        for assignee_item in assignee_stats_list:
-                            # Case 1: [name, stats] format
-                            if isinstance(assignee_item, list) and len(assignee_item) == 2:
-                                assignee, stats = assignee_item
-                                if assignee in assignee_bug_stats_map:
-                                    assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
-                                    assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
-                                else:
-                                    assignee_bug_stats_map[assignee] = {
-                                        "total": stats.get("total", 0),
-                                        "reopened": stats.get("reopened", 0)
-                                    }
-                            # Case 2: dict format with name and stats
-                            elif isinstance(assignee_item, dict) and 'name' in assignee_item and 'stats' in assignee_item:
-                                assignee = assignee_item['name']
-                                stats = assignee_item['stats']
-                                if assignee in assignee_bug_stats_map:
-                                    assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
-                                    assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
-                                else:
-                                    assignee_bug_stats_map[assignee] = {
-                                        "total": stats.get("total", 0),
-                                        "reopened": stats.get("reopened", 0)
-                                    }
-                    # Case 3: Direct dict format {name: {stats}, ...}
-                    elif isinstance(assignee_stats_list, dict):
-                        for assignee, stats in assignee_stats_list.items():
-                            if assignee in assignee_bug_stats_map:
-                                assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
-                                assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
-                            else:
-                                assignee_bug_stats_map[assignee] = {
-                                    "total": stats.get("total", 0),
-                                    "reopened": stats.get("reopened", 0)
-                                }
-            except Exception as e:
-                logger.error(f"Error processing assignee bug stats for project {project_key}: {str(e)}")
-
-            # Aggregate participants data
-            try:
-                for participant in project_stats.get("participants", []):
-                    participant_key = participant.get("key")
-                    if not participant_key:
-                        continue
-
-                    if participant_key in participants_map:
-                        # Update counts
-                        participants_map[participant_key]["assignedCount"] += participant.get("assignedCount", 0)
-                        participants_map[participant_key]["reportedCount"] += participant.get("reportedCount", 0)
-                        participants_map[participant_key]["commentCount"] += participant.get("commentCount", 0)
-                        participants_map[participant_key]["issueCount"] += participant.get("issueCount", 0)
-                    else:
-                        # Add new participant
-                        participants_map[participant_key] = participant.copy()
-            except Exception as e:
-                logger.error(f"Error processing participants data for project {project_key}: {str(e)}")
-
-            # Collect recent issues (up to 5 per project)
-            try:
-                project_issues = project_stats.get("recent_issues", [])
-                if project_issues:
-                    recent_issues.extend(project_issues[:5])
-            except Exception as e:
-                logger.error(f"Error processing recent issues for project {project_key}: {str(e)}")
-                
         except Exception as e:
             logger.error(f"Error processing statistics for project {project_key}: {str(e)}")
-            continue
+            return None
+
+    # Process projects using ThreadPoolExecutor
+    logger.info(f"Starting multi-threaded statistics collection for {len(all_project_keys)} projects")
+    max_workers = min(10, len(all_project_keys))  # Limit number of threads
+
+    # Process projects in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all projects to the executor
+        future_to_project = {
+            executor.submit(process_project, project_key): project_key
+            for project_key in all_project_keys
+        }
+
+        # Collect results as they complete
+        for future in concurrent.futures.as_completed(future_to_project):
+            project_key = future_to_project[future]
+            try:
+                project_result = future.result()
+
+                if not project_result:
+                    continue
+
+                # Aggregate numeric data (thread-safe operations)
+                with aggregated_stats_lock:
+                    aggregated_stats["total_issues"] += project_result["total_issues"]
+                    aggregated_stats["completed_tasks_count"] += project_result["completed_tasks_count"]
+                    aggregated_stats["reopened_bugs_count"] += project_result["reopened_bugs_count"]
+                    aggregated_stats["bugs_count"] += project_result["bugs_count"]
+
+                # Aggregate status counts with lock
+                with status_counts_lock:
+                    for status, count in project_result["status_counts"].items():
+                        if status in aggregated_stats["status_counts"]:
+                            aggregated_stats["status_counts"][status] += count
+                        else:
+                            aggregated_stats["status_counts"][status] = count
+
+                # Aggregate issue types with lock
+                with issue_types_lock:
+                    for issue_type, count in project_result["issue_types"].items():
+                        if issue_type in aggregated_stats["issue_types"]:
+                            aggregated_stats["issue_types"][issue_type] += count
+                        else:
+                            aggregated_stats["issue_types"][issue_type] = count
+
+                # Aggregate reopeners data with lock
+                with reopeners_lock:
+                    reopeners_list = project_result["reopeners"]
+                    if reopeners_list:
+                        if isinstance(reopeners_list, list):
+                            for reopener_item in reopeners_list:
+                                if isinstance(reopener_item, list) and len(reopener_item) == 2:
+                                    reopener, count = reopener_item
+                                    if reopener in reopeners_map:
+                                        reopeners_map[reopener] += count
+                                    else:
+                                        reopeners_map[reopener] = count
+                                elif isinstance(reopener_item,
+                                                dict) and 'name' in reopener_item and 'count' in reopener_item:
+                                    reopener = reopener_item['name']
+                                    count = reopener_item['count']
+                                    if reopener in reopeners_map:
+                                        reopeners_map[reopener] += count
+                                    else:
+                                        reopeners_map[reopener] = count
+                        elif isinstance(reopeners_list, dict):
+                            for reopener, count in reopeners_list.items():
+                                if reopener in reopeners_map:
+                                    reopeners_map[reopener] += count
+                                else:
+                                    reopeners_map[reopener] = count
+
+                # Aggregate assignee bug stats with lock
+                with assignee_bug_lock:
+                    assignee_stats_list = project_result["assignee_bug_stats"]
+                    if assignee_stats_list:
+                        if isinstance(assignee_stats_list, list):
+                            for assignee_item in assignee_stats_list:
+                                if isinstance(assignee_item, list) and len(assignee_item) == 2:
+                                    assignee, stats = assignee_item
+                                    if assignee in assignee_bug_stats_map:
+                                        assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
+                                        assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
+                                    else:
+                                        assignee_bug_stats_map[assignee] = {
+                                            "total": stats.get("total", 0),
+                                            "reopened": stats.get("reopened", 0)
+                                        }
+                                elif isinstance(assignee_item,
+                                                dict) and 'name' in assignee_item and 'stats' in assignee_item:
+                                    assignee = assignee_item['name']
+                                    stats = assignee_item['stats']
+                                    if assignee in assignee_bug_stats_map:
+                                        assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
+                                        assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
+                                    else:
+                                        assignee_bug_stats_map[assignee] = {
+                                            "total": stats.get("total", 0),
+                                            "reopened": stats.get("reopened", 0)
+                                        }
+                        elif isinstance(assignee_stats_list, dict):
+                            for assignee, stats in assignee_stats_list.items():
+                                if assignee in assignee_bug_stats_map:
+                                    assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
+                                    assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
+                                else:
+                                    assignee_bug_stats_map[assignee] = {
+                                        "total": stats.get("total", 0),
+                                        "reopened": stats.get("reopened", 0)
+                                    }
+
+                # Aggregate participants data with lock
+                with participants_lock:
+                    for participant in project_result["participants"]:
+                        participant_key = participant.get("key")
+                        if not participant_key:
+                            continue
+
+                        if participant_key in participants_map:
+                            # Update counts
+                            participants_map[participant_key]["assignedCount"] += participant.get("assignedCount", 0)
+                            participants_map[participant_key]["reportedCount"] += participant.get("reportedCount", 0)
+                            participants_map[participant_key]["commentCount"] += participant.get("commentCount", 0)
+                            participants_map[participant_key]["issueCount"] += participant.get("issueCount", 0)
+                        else:
+                            # Add new participant
+                            participants_map[participant_key] = participant.copy()
+
+                # Collect recent issues with lock
+                with recent_issues_lock:
+                    if project_result["recent_issues"]:
+                        recent_issues.extend(project_result["recent_issues"])
+
+            except Exception as e:
+                logger.error(f"Error processing results for project {project_key}: {str(e)}")
+
+    logger.info(f"Processed {len(all_project_keys)} projects using multi-threading. Finalizing results...")
 
     # Convert maps back to lists
     try:
-        # Log the reopeners map for debugging
-        logger.info(f"Final reopeners map: {reopeners_map}")
-        
-        # Only create the sorted list if we have data
-        if reopeners_map:
-            aggregated_stats["reopeners"] = sorted(
-                [[name, count] for name, count in reopeners_map.items()],
-                key=lambda x: x[1],
-                reverse=True
-            )
-        else:
-            logger.warning("No reopeners data found across all projects")
-            aggregated_stats["reopeners"] = []
+        aggregated_stats["reopeners"] = sorted(
+            [[name, count] for name, count in reopeners_map.items()],
+            key=lambda x: x[1],
+            reverse=True
+        )
     except Exception as e:
         logger.error(f"Error sorting reopeners: {str(e)}")
         aggregated_stats["reopeners"] = []
 
     try:
-        # Log the assignee bug stats map for debugging
-        logger.info(f"Final assignee bug stats map: {assignee_bug_stats_map}")
-        
-        # Only create the sorted list if we have data
-        if assignee_bug_stats_map:
-            aggregated_stats["assignee_bug_stats"] = sorted(
-                [[name, stats] for name, stats in assignee_bug_stats_map.items()],
-                key=lambda x: x[1]["total"],
-                reverse=True
-            )
-        else:
-            logger.warning("No assignee bug stats found across all projects")
-            aggregated_stats["assignee_bug_stats"] = []
+        aggregated_stats["assignee_bug_stats"] = sorted(
+            [[name, stats] for name, stats in assignee_bug_stats_map.items()],
+            key=lambda x: x[1]["total"],
+            reverse=True
+        )
     except Exception as e:
         logger.error(f"Error sorting assignee bug stats: {str(e)}")
         aggregated_stats["assignee_bug_stats"] = []
-
-    # Update processed projects list
-    processed_projects.extend(projects_to_process)
-    
-    # Save partial results to cache
-    try:
-        # Prepare data for caching
-        maps_data = {
-            'participants_map': participants_map,
-            'reopeners_map': reopeners_map,
-            'assignee_bug_stats_map': assignee_bug_stats_map,
-            'recent_issues': recent_issues,
-            'processed_projects': processed_projects
-        }
-        
-        partial_cache_data = {
-            'statistics': aggregated_stats,
-            'maps': maps_data,
-            'meta': {
-                'processed_count': len(processed_projects),
-                'total_count': len(all_project_keys),
-                'timestamp': time.time()
-            }
-        }
-        
-        # Write to partial cache file
-        with open(partial_cache_file, 'w') as f:
-            json.dump(partial_cache_data, f)
-            
-        logger.info(f"Saved partial results to cache, processed {len(processed_projects)} of {len(all_project_keys)} projects")
-    except Exception as e:
-        logger.error(f"Error saving partial cache: {str(e)}")
     
     # Convert maps to final format for response
     aggregated_stats["participants"] = list(participants_map.values())
@@ -1803,32 +1728,28 @@ def get_multi_group_statistics():
     except Exception as e:
         logger.error(f"Error sorting recent issues: {str(e)}")
         aggregated_stats["recent_issues"] = []
-        
-    # Check if we've processed all projects
-    all_processed = len(processed_projects) >= len(all_project_keys)
-    
-    # If all projects are processed, save the complete result to cache
-    if all_processed:
-        try:
-            complete_result = {
-                "status": "success",
-                "statistics": aggregated_stats,
-                "group_info": {
-                    "groups": groups,
-                    "group_count": len(groups),
-                    "project_count": len(all_project_keys),
-                    "project_keys": all_project_keys,
-                    "complete": True
-                }
+
+    # Save the complete result to cache
+    try:
+        complete_result = {
+            "status": "success",
+            "statistics": aggregated_stats,
+            "group_info": {
+                "groups": groups,
+                "group_count": len(groups),
+                "project_count": len(all_project_keys),
+                "project_keys": all_project_keys,
+                "complete": True
             }
-            
-            # Write to complete cache file
-            with open(cache_file, 'w') as f:
-                json.dump(complete_result, f)
-                
-            logger.info(f"Saved complete results to cache")
-        except Exception as e:
-            logger.error(f"Error saving complete cache: {str(e)}")
+        }
+
+        # Write to complete cache file
+        with open(cache_file, 'w') as f:
+            json.dump(complete_result, f)
+
+        logger.info(f"Saved complete results to cache")
+    except Exception as e:
+        logger.error(f"Error saving complete cache: {str(e)}")
 
     return jsonify({
         "status": "success",
@@ -1838,11 +1759,7 @@ def get_multi_group_statistics():
             "group_count": len(groups),
             "project_count": len(all_project_keys),
             "project_keys": all_project_keys,
-            "processed_projects": processed_projects,
-            "processed_count": len(processed_projects),
-            "total_count": len(all_project_keys),
-            "complete": all_processed,
-            "next_page": page + 1 if not all_processed else None
+            "complete": True
         }
     })
 
