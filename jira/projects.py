@@ -146,7 +146,7 @@ class ProjectHandler:
             issue_handler = IssueHandler(self.core)
             issues = issue_handler.search_issues(
                 jql,
-                fields="assignee",  # Only request the assignee field
+                fields="assignee,reporter,comment",  # Request assignee, reporter, and comment fields
                 max_results=200,  # Reduced from 500 to 200
                 use_cache=True,  # Use cache to avoid repeated calls
                 expiry=1800  # Cache for 30 minutes
@@ -154,25 +154,79 @@ class ProjectHandler:
 
             participants = {}
 
-            # Process assignees only
+            # Process all participants (assignees, reporters, and commenters)
             for issue in issues:
                 fields = issue.get('fields', {})
+                if not fields:
+                    continue
 
                 # Process assignee
                 assignee = fields.get('assignee')
-                if assignee and assignee.get('key'):
-                    user_key = assignee.get('key')
-                    if user_key not in participants:
+                if assignee and isinstance(assignee, dict):
+                    user_key = assignee.get('key') or assignee.get('accountId')
+                    if user_key and user_key not in participants:
                         participants[user_key] = {
                             'key': user_key,
                             'name': assignee.get('displayName', 'Unknown'),
                             'avatarUrl': assignee.get('avatarUrls', {}).get('48x48', ''),
                             'email': assignee.get('emailAddress', ''),
+                            'accountId': assignee.get('accountId', ''),
+                            'active': assignee.get('active', True),
+                            'timeZone': assignee.get('timeZone', ''),
                             'issueCount': 0,
-                            'assignedCount': 0
+                            'assignedCount': 0,
+                            'reportedCount': 0,
+                            'commentCount': 0
                         }
-                    participants[user_key]['assignedCount'] += 1
-                    participants[user_key]['issueCount'] += 1
+                    if user_key in participants:
+                        participants[user_key]['assignedCount'] += 1
+                        participants[user_key]['issueCount'] += 1
+                
+                # Process reporter
+                reporter = fields.get('reporter')
+                if reporter and isinstance(reporter, dict):
+                    user_key = reporter.get('key') or reporter.get('accountId')
+                    if user_key and user_key not in participants:
+                        participants[user_key] = {
+                            'key': user_key,
+                            'name': reporter.get('displayName', 'Unknown'),
+                            'avatarUrl': reporter.get('avatarUrls', {}).get('48x48', ''),
+                            'email': reporter.get('emailAddress', ''),
+                            'accountId': reporter.get('accountId', ''),
+                            'active': reporter.get('active', True),
+                            'timeZone': reporter.get('timeZone', ''),
+                            'issueCount': 0,
+                            'assignedCount': 0,
+                            'reportedCount': 0,
+                            'commentCount': 0
+                        }
+                    if user_key in participants:
+                        participants[user_key]['reportedCount'] += 1
+                        participants[user_key]['issueCount'] += 1
+                
+                # Process commenters
+                comments = fields.get('comment', {}).get('comments', [])
+                for comment in comments:
+                    author = comment.get('author')
+                    if author and isinstance(author, dict):
+                        user_key = author.get('key') or author.get('accountId')
+                        if user_key and user_key not in participants:
+                            participants[user_key] = {
+                                'key': user_key,
+                                'name': author.get('displayName', 'Unknown'),
+                                'avatarUrl': author.get('avatarUrls', {}).get('48x48', ''),
+                                'email': author.get('emailAddress', ''),
+                                'accountId': author.get('accountId', ''),
+                                'active': author.get('active', True),
+                                'timeZone': author.get('timeZone', ''),
+                                'issueCount': 0,
+                                'assignedCount': 0,
+                                'reportedCount': 0,
+                                'commentCount': 0
+                            }
+                        if user_key in participants:
+                            participants[user_key]['commentCount'] += 1
+                            # Don't increment issueCount for comments to avoid double counting
 
             # Convert dictionary to list and sort by issue count
             result = list(participants.values())

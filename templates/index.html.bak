@@ -236,10 +236,10 @@
                                             </button>
                                             <ul class="dropdown-menu dropdown-menu-end">
                                                 <li>
-                                                     <a class="dropdown-item" href="#"
-                                                         onclick="event.stopPropagation(); openWebhookModal('{{ project.key }}', '{{ project.webhook|default('') }}');">
-                                                          <i class="bi bi-discord me-2"></i>Set Discord Webhook
-                                                      </a>
+                                                    <a class="dropdown-item" href="#"
+                                                       onclick="event.stopPropagation(); openWebhookModal('{{ project.key }}', '{{ project.webhook|default('') }}');">
+                                                        <i class="bi bi-discord me-2"></i>Set Discord Webhook
+                                                    </a>
                                                 </li>
                                                 <li>
                                                     <a class="dropdown-item" href="#"
@@ -466,7 +466,42 @@
                     </div>
                 </div>
 
-                <!-- Project Participants section has been removed -->
+                <!-- Project Participants -->
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0">Project Participants</h6>
+                        <span class="badge bg-primary" id="totalParticipants">0</span>
+                    </div>
+                    <div class="card-body">
+                        <!-- Participants Chart -->
+                        <div id="participantsChartContainer" style="height: 300px; margin-bottom: 20px;">
+                            <canvas id="participantsBarChart"></canvas>
+                            <div class="text-center my-3" id="participantsSpinnerContainer">
+                                <div class="spinner-border" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped" id="participantsTable">
+                                <thead>
+                                <tr>
+                                    <th>Participant</th>
+                                    <th>Assigned</th>
+                                    <th>Reported</th>
+                                    <th>Comments</th>
+                                    <th>Total Issues</th>
+                                    <th>Actions</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <!-- Participants will be loaded dynamically -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
 
                 <!-- Recent Issues -->
                 <div class="card">
@@ -759,24 +794,6 @@
     let participantsChart = null;
     let currentStatsRequest = null; // Track the current statistics request
 
-    // Avatar generation function
-    function generateAvatar(name, email) {
-        // Generate a consistent color based on the name
-        let hash = 0;
-        for (let i = 0; i < name.length; i++) {
-            hash = name.charCodeAt(i) + ((hash << 5) - hash);
-        }
-        
-        // If email is available, use Gravatar
-        if (email && email.includes('@')) {
-            // Simple hash for demo - in production use a proper MD5 library
-            return `https://www.gravatar.com/avatar/${Math.abs(hash).toString(16)}?d=identicon&s=32`;
-        }
-        
-        // Otherwise use a consistent avatar based on name
-        return `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=${Math.abs(hash).toString(16).substr(0, 6)}&color=fff&size=32`;
-    }
-
     // Chart update functions removed
 
     /**
@@ -918,101 +935,85 @@
      */
     function updateAssigneeBugChart(assigneeBugStats) {
         const container = document.getElementById('assigneeBugStatsChart');
+        if (!container) {
+            console.error("Assignee bug chart container not found");
+            return;
+        }
+
+        const spinner = document.getElementById('assigneeBugSpinnerContainer');
+        if (spinner) {
+            spinner.remove();
+        }
         
-        // Debug: Log the assignee bug stats data
-        console.log('Original assigneeBugStats:', JSON.parse(JSON.stringify(assigneeBugStats)));
-        
+        // If no assignee data or empty array
         if (!assigneeBugStats || assigneeBugStats.length === 0) {
-            container.innerHTML = '<p class="text-center text-muted mt-5">No assignee bug data available</p>';
+            container.innerHTML = '<p class="text-center text-muted mt-5">No bug assignee data available</p>';
+            if (assigneeBugChart) {
+                assigneeBugChart.destroy();
+                assigneeBugChart = null;
+            }
             return;
         }
         
-        // Clear the container first
-        container.innerHTML = '<canvas id="assigneeBugBarChart"></canvas>';
+        // Create a table to display assignees with avatars and bug counts
+        const tableContainer = document.createElement('div');
+        tableContainer.className = 'table-responsive mt-3';
+        const table = document.createElement('table');
+        table.className = 'table table-sm table-striped';
         
-        // Process and sort assignee bug stats directly without using a Map
-        // This ensures we don't lose any entries with duplicate display names
-        const processedStats = assigneeBugStats.map(stat => ({
-            name: stat.name || 'Unassigned',
-            total: stat.total || 0,
-            reopened: stat.reopened || 0,
-            key: stat.key || '',
-            composite_id: stat.composite_id || '',
-            email: stat.email || '',
-            avatarUrl: stat.avatarUrl || ''
-        }));
+        // Create table header
+        const thead = document.createElement('thead');
+        thead.innerHTML = `
+            <tr>
+                <th>Assignee</th>
+                <th>Total Bugs</th>
+                <th>Reopened Bugs</th>
+                <th>Actions</th>
+            </tr>
+        `;
+        table.appendChild(thead);
         
-        // Debug: Log the processed stats
-        console.log('Processed stats:', processedStats);
+        // Create table body
+        const tbody = document.createElement('tbody');
         
-        // Sort by total bugs (descending)
-        const sortedStats = processedStats.sort((a, b) => b.total - a.total);
-        
-        // Debug: Log the sorted stats
-        console.log('Sorted stats:', sortedStats);
-        
-        // Prepare data for chart
+        // Process data for the chart and table
         const labels = [];
         const totalData = [];
         const reopenedData = [];
         
-        // Create table for assignee bug stats
-        const assigneeTableContainer = document.createElement('div');
-        assigneeTableContainer.className = 'table-responsive mt-4';
-        
-        const assigneeTable = document.createElement('table');
-        assigneeTable.className = 'table table-sm table-hover';
-        
-        // Create table header
-        const assigneeThead = document.createElement('thead');
-        assigneeThead.innerHTML = `
-            <tr>
-                <th>Assignee</th>
-                <th>Total Bugs</th>
-                <th>Reopened</th>
-                <th>Actions</th>
-            </tr>
-        `;
-        assigneeTable.appendChild(assigneeThead);
-        
-        // Create table body
-        const assigneeTbody = document.createElement('tbody');
-        
-        // Use all assignees from the sortedStats array
-        sortedStats.forEach(stats => {
-            const displayName = stats.name;
-            labels.push(displayName);
+        // Use all assignees
+        for (const [name, stats] of assigneeBugStats) {
+            labels.push(name);
             totalData.push(stats.total);
             reopenedData.push(stats.reopened);
             
             // Generate avatar URL if not present
-            const avatarUrl = stats.avatarUrl || generateAvatar(displayName, stats.email);
+            const avatarUrl = stats.avatarUrl || generateAvatar(name, stats.email);
             
             // Add row to table
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td>
                     <div class="d-flex align-items-center">
-                        <img src="${avatarUrl}" alt="${displayName}" class="avatar-img me-2">
-                        <span>${displayName}</span>
+                        <img src="${avatarUrl}" alt="${name}" class="avatar-img me-2">
+                        <span>${name}</span>
                     </div>
                 </td>
                 <td>${stats.total}</td>
                 <td>${stats.reopened}</td>
                 <td>
                     <button class="btn btn-sm btn-outline-primary" 
-                            onclick="filterByParticipant('${stats.composite_id || stats.key || ''}', '${displayName}')" 
+                            onclick="filterByParticipant('${stats.key || ''}', '${name}')" 
                             title="Filter by this assignee">
                         <i class="bi bi-funnel"></i>
                     </button>
                 </td>
             `;
-            assigneeTbody.appendChild(row);
-        });
+            tbody.appendChild(row);
+        }
         
-        assigneeTable.appendChild(assigneeTbody);
-        assigneeTableContainer.appendChild(assigneeTable);
-        container.appendChild(assigneeTableContainer);
+        table.appendChild(tbody);
+        tableContainer.appendChild(table);
         
         // Data is available. Ensure the canvas element is present.
         let ctx = document.getElementById('assigneeBugBarChart');
@@ -1076,15 +1077,22 @@
                         title: {
                             display: true,
                             text: 'Number of Bugs'
-                        }
+                        },
+                        stacked: false
+                    },
+                    y: {
+                        stacked: false
                     }
                 }
             }
         });
         
-        // Adjust the height of the chart based on the number of assignees
-        const chartHeight = Math.max(300, labels.length * 30); // Minimum 300px, 30px per assignee
-        ctx.parentElement.style.height = `${chartHeight}px`;
+        // Adjust the height of the chart container based on the number of assignees
+        const chartHeight = Math.max(250, assigneeBugStats.length * 25); // Minimum 250px, 25px per assignee
+        container.style.height = `${chartHeight}px`;
+        
+        // Add the table below the chart
+        container.appendChild(tableContainer);
     }
 
     function generateChartColors(count, usePresetColors = false) {
@@ -1981,50 +1989,11 @@
             });
     }
     
-    // Function to reset statistics filters
     function resetStatsFilters() {
         console.log("Resetting stats filters");
         document.getElementById('statsStartDate').value = '';
         document.getElementById('statsEndDate').value = '';
         document.getElementById('statsParticipantFilter').innerHTML = '<option value="">All Participants</option>';
-    }
-    
-    // Function to filter statistics by participant
-    function filterByParticipant(participantKey, participantName) {
-        console.log(`Filtering by participant: ${participantName} (${participantKey})`);
-        
-        // Get the current project key from the stats modal
-        const projectKey = document.getElementById('statsProjectKey').value;
-        
-        // If we're in multi-group mode
-        if (!projectKey) {
-            // Get selected groups if in multi-group mode
-            const selectedGroups = window.currentSelectedGroups || [];
-            if (selectedGroups.length > 0) {
-                // Get date filters
-                const startDate = document.getElementById('statsStartDate').value;
-                const endDate = document.getElementById('statsEndDate').value;
-                
-                // Set the participant filter dropdown
-                const participantFilter = document.getElementById('statsParticipantFilter');
-                participantFilter.value = participantKey;
-                
-                // Load multi-group statistics with participant filter
-                loadMultiGroupStatistics(selectedGroups, startDate, endDate, participantKey);
-                return;
-            }
-        }
-        
-        // Set the participant filter dropdown
-        const participantFilter = document.getElementById('statsParticipantFilter');
-        participantFilter.value = participantKey;
-        
-        // Get date filters
-        const startDate = document.getElementById('statsStartDate').value;
-        const endDate = document.getElementById('statsEndDate').value;
-        
-        // Load project statistics with the participant filter
-        loadProjectStatistics(projectKey, startDate, endDate, participantKey);
     }
     
     function applyStatsFilters() {
@@ -2052,39 +2021,17 @@
         }
     }
         
-    // Function to handle errors when loading statistics
-    function handleStatsLoadError(message) {
-        // Clear loading indicators
-        document.getElementById('statsTotalIssues').textContent = 'Error';
-        document.getElementById('statsCompletedTasks').textContent = 'Error';
-        document.getElementById('statsReopenedBugs').textContent = 'Error';
-        document.getElementById('totalParticipants').textContent = 'Error';
-        
-        // Clear tables
-        document.getElementById('participantsTable').getElementsByTagName('tbody')[0].innerHTML = 
-            `<tr><td colspan="6" class="text-center text-danger">${message}</td></tr>`;
-        document.getElementById('recentIssuesTable').getElementsByTagName('tbody')[0].innerHTML = 
-            `<tr><td colspan="6" class="text-center text-danger">${message}</td></tr>`;
-            
-        // Clear charts
-        document.getElementById('reopenersChart').innerHTML = 
-            `<p class="text-center text-danger mt-5">${message}</p>`;
-        document.getElementById('assigneeBugStatsChart').innerHTML = 
-            `<p class="text-center text-danger mt-5">${message}</p>`;
-        document.getElementById('participantsChartContainer').innerHTML = 
-            `<p class="text-center text-danger mt-5">${message}</p>`;
-    }
-    
-    // Function to update participants chart
-    function updateParticipantsChart(participants) {
-        const container = document.getElementById('participantsChartContainer');
-        if (!participants || participants.length === 0) {
-            container.innerHTML = '<p class="text-center text-muted mt-5">No participant data available</p>';
-            return;
+        if (!optionExists && participantKey) {
+            const option = document.createElement('option');
+            option.value = participantKey;
+            option.textContent = participantName;
+            participantFilter.appendChild(option);
         }
         
-        // Clear the container first
-        container.innerHTML = '<canvas id="participantsBarChart"></canvas>';
+        // Set the value
+        participantFilter.value = participantKey;
+            return;
+        }
         
         // Data is available. Ensure the canvas element is present.
         let ctx = document.getElementById('participantsBarChart');
@@ -2494,7 +2441,7 @@
                 const actionsCell = row.insertCell();
                 actionsCell.innerHTML = `
                     <button class="btn btn-sm btn-outline-primary" 
-                            onclick="filterByParticipant('${participant.composite_id || participant.key || ''}', '${participant.name}')" 
+                            onclick="filterByParticipant('${participant.key || ''}', '${participant.name}')" 
                             title="Filter by this participant">
                         <i class="bi bi-funnel"></i>
                     </button>
@@ -2792,8 +2739,5 @@ participantsTableBody.innerHTML = '';
     // Fix for missing closing brace
 }
 </script>
-
-<!-- Fixed Charts Implementation -->
-<script src="{{ url_for('static', filename='js/fixed_charts.js') }}"></script>
 </body>
 </html>

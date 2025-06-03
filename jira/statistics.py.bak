@@ -272,22 +272,13 @@ class StatisticsHandler:
                     assignee_obj = fields.get('assignee')
                     assignee_name = assignee_obj.get('displayName', 'Unassigned') if assignee_obj else 'Unassigned'
                     
-                    # Get unique identifier for assignee (avatarUrl, accountId or key)
+                    # Get unique identifier for assignee (accountId or key)
                     assignee_id = None
-                    avatar_url = ''
                     if assignee_obj:
-                        # Get avatar URL first as it's more unique than display name
-                        avatar_urls = assignee_obj.get('avatarUrls', {})
-                        avatar_url = next(iter(avatar_urls.values()), '') if avatar_urls else ''
-                        # Get account ID or key as backup
                         assignee_id = assignee_obj.get('accountId') or assignee_obj.get('key')
                     
-                    # Create a composite key with priority on avatar URL
-                    # This ensures users with the same name but different avatars are treated as different users
-                    if avatar_url:
-                        assignee_key = f"{avatar_url}|{assignee_id if assignee_id else assignee_name}"
-                    else:
-                        assignee_key = assignee_id if assignee_id else assignee_name
+                    # Use the unique ID as the key if available, otherwise use name
+                    assignee_key = assignee_id if assignee_id else assignee_name
                     
                     # Store full assignee data for reference
                     assignee_data = {}
@@ -366,22 +357,13 @@ class StatisticsHandler:
                             assignee_obj = fields.get('assignee')
                             assignee_name = assignee_obj.get('displayName', 'Unassigned') if assignee_obj else 'Unassigned'
                             
-                            # Get unique identifier for assignee (avatarUrl, accountId or key)
+                            # Get unique identifier for assignee (accountId or key)
                             assignee_id = None
-                            avatar_url = ''
                             if assignee_obj:
-                                # Get avatar URL first as it's more unique than display name
-                                avatar_urls = assignee_obj.get('avatarUrls', {})
-                                avatar_url = next(iter(avatar_urls.values()), '') if avatar_urls else ''
-                                # Get account ID or key as backup
                                 assignee_id = assignee_obj.get('accountId') or assignee_obj.get('key')
                             
-                            # Create a composite key with priority on avatar URL
-                            # This ensures users with the same name but different avatars are treated as different users
-                            if avatar_url:
-                                assignee_key = f"{avatar_url}|{assignee_id if assignee_id else assignee_name}"
-                            else:
-                                assignee_key = assignee_id if assignee_id else assignee_name
+                            # Use the unique ID as the key if available, otherwise use name
+                            assignee_key = assignee_id if assignee_id else assignee_name
                             
                             if assignee_key in assignee_bug_stats:
                                 assignee_bug_stats[assignee_key]['total'] += 1
@@ -433,27 +415,21 @@ class StatisticsHandler:
                             assignee_data = {}
                         else:
                             assignee_name = assignee_obj.get('displayName', 'Unassigned')
-                            # Get unique identifier for assignee (avatarUrl, accountId or key)
+                            # Get unique identifier for assignee (accountId or key)
                             assignee_id = assignee_obj.get('accountId') or assignee_obj.get('key')
-                            # Get avatar URL first as it's more unique than display name
-                            avatar_urls = assignee_obj.get('avatarUrls', {})
-                            avatar_url = next(iter(avatar_urls.values()), '') if avatar_urls else ''
-                            
-                            # Create a composite key with priority on avatar URL
-                            # This ensures users with the same name but different avatars are treated as different users
-                            if avatar_url:
-                                assignee_key = f"{avatar_url}|{assignee_id if assignee_id else assignee_name}"
-                            else:
-                                assignee_key = assignee_id if assignee_id else assignee_name
-                                
+                            # Use the unique ID as the key if available, otherwise use name
+                            assignee_key = assignee_id if assignee_id else assignee_name
                             # Store full assignee data for reference
+                            # Store all available avatar URLs to ensure we have options for identification
+                            avatar_urls = assignee_obj.get('avatarUrls', {})
+                            
                             assignee_data = {
                                 'displayName': assignee_obj.get('displayName', 'Unknown'),
                                 'key': assignee_obj.get('key', ''),
                                 'accountId': assignee_obj.get('accountId', ''),
                                 'emailAddress': assignee_obj.get('emailAddress', ''),
                                 'avatarUrls': avatar_urls,
-                                'avatarUrl': avatar_url,
+                                'avatarUrl': next(iter(avatar_urls.values()), '') if avatar_urls else '',
                                 'active': assignee_obj.get('active', True),
                                 'timeZone': assignee_obj.get('timeZone', ''),
                                 'locale': assignee_obj.get('locale', '')
@@ -502,27 +478,13 @@ class StatisticsHandler:
                 # Convert to the format expected by the frontend
                 formatted_assignee_bug_stats = []
                 for name, stats in enhanced_assignee_bug_stats:
-                    # Extract the display name from the composite key if possible
-                    display_name = stats.get('name', '')
-                    if not display_name and '|' in name:
-                        # If the name is a composite key, extract the display name part
-                        parts = name.split('|')
-                        if len(parts) > 1:
-                            # The last part is often the display name in our composite keys
-                            display_name = parts[-1]
-                    
-                    # If we still don't have a display name, use the name as is
-                    if not display_name:
-                        display_name = name
-                    
                     formatted_stats = {
-                        'name': display_name,  # Use the extracted display name
+                        'name': stats.get('name', name),
                         'total': stats.get('total', 0),
                         'reopened': stats.get('reopened', 0),
                         'key': stats.get('key', ''),
                         'email': stats.get('email', ''),
-                        'avatarUrl': stats.get('avatarUrl', ''),
-                        'composite_id': name  # Use the full composite key as the composite_id
+                        'avatarUrl': stats.get('avatarUrl', '')
                     }
                     formatted_assignee_bug_stats.append(formatted_stats)
                 
@@ -532,11 +494,6 @@ class StatisticsHandler:
                     key=lambda x: x['total'],
                     reverse=True
                 )
-                
-                # Debug logging
-                logger.info(f"Assignee bug stats count: {len(sorted_assignee_bug_stats)}")
-                for i, stat in enumerate(sorted_assignee_bug_stats[:10]):  # Log first 10 for brevity
-                    logger.info(f"Assignee {i}: name={stat['name']}, composite_id={stat['composite_id']}, avatarUrl={stat['avatarUrl'][:30]}...")
             except Exception as e:
                 logger.error(f"Error sorting assignee stats: {str(e)}")
                 sorted_assignee_bug_stats = []
@@ -686,43 +643,14 @@ class StatisticsHandler:
 
             return result
 
-        except Exception as e:
-            logger.error(f"Error getting status transitions: {str(e)}")
-            return {}
+        logger.info(f"Found {len(all_issues)} bugs in project {project_key}, processing...")
 
-    def find_reopened_bugs_by_jql(self, project_key, start_date=None, end_date=None, participant=None):
-        """
-        Find bugs that have been reopened in a specific project using JQL
-        
-        Args:
-            project_key: The Jira project key
-            start_date: Optional start date for filtering
-            end_date: Optional end date for filtering
-            participant: Optional participant for filtering
-        """
-        if not self.core.is_configured():
-            logger.error("Jira API credentials not configured")
-            return []
+        # Extract relevant fields from the issues
+        all_issues = [issue_handler._extract_fields(issue) for issue in all_issues]
 
-        # Create a cache key based on all filter parameters
-        cache_key = f"reopened_bugs_{project_key}_{start_date}_{end_date}_{participant}"
-
-        # Check if we have a valid cache entry
-        if self.core._is_cache_valid(cache_key) and cache_key in self.core._issues_cache:
-            logger.info(f"Using cached reopened bugs for project {project_key}")
-            return self.core._issues_cache[cache_key]
-
-        try:
-            # Base JQL to get bugs in the project
-            jql_parts = [f"project = {project_key}", "issuetype = Bug"]
-
-            # Add time constraints if provided
-            if start_date:
-                jql_parts.append(f'updated >= "{start_date}"')
-            if end_date:
-                jql_parts.append(f'updated <= "{end_date}"')
-
-            jql = " AND ".join(jql_parts) + " ORDER BY updated DESC"
+        # Get all available statuses
+        all_statuses = self.core.get_available_statuses()
+        status_names = {status["id"]: status["name"] for status in all_statuses}
 
             # OPTIMIZATION: Get bugs with changelog in a single request
             # This reduces API calls by using the expand parameter
@@ -810,176 +738,6 @@ class StatisticsHandler:
             self.core._issues_cache[cache_key] = []
             return []
 
-    def _filter_participants_from_cache(self, base_stats, participant):
-        """
-        Filter statistics by participant from cached data
-        
-        Args:
-            base_stats: The base statistics to filter
-            participant: The participant identifier to filter by (can be a composite key)
-        """
-        logger.info(f"Filtering cached statistics for participant: {participant}")
-        try:
-            # Create a copy of the base stats to avoid modifying the original
-            filtered_stats = base_stats.copy()
-            
-            # Extract participant name from composite key if needed
-            participant_name = participant
-            if '|' in participant:
-                # The participant is a composite key, extract components
-                parts = participant.split('|')
-                # The name might be in different positions depending on the key format
-                # Try to find a non-empty part that's likely the name
-                for part in parts:
-                    if part and not part.startswith('http'):
-                        participant_name = part
-                        break
-            
-            # Filter recent issues to only those assigned to the participant
-            if 'recent_issues' in filtered_stats:
-                filtered_recent_issues = []
-                for issue in filtered_stats['recent_issues']:
-                    # Check if the issue is assigned to the participant
-                    # First try exact match with composite key if available
-                    assignee_key = issue.get('assignee_key', '')
-                    assignee = issue.get('assignee', '')
-                    
-                    if assignee_key and assignee_key == participant:
-                        filtered_recent_issues.append(issue)
-                    # Fallback to name comparison if keys don't match
-                    elif assignee and assignee.lower() == participant_name.lower():
-                        filtered_recent_issues.append(issue)
-                filtered_stats['recent_issues'] = filtered_recent_issues
-            
-            # Filter assignee bug stats to only the specified participant
-            if 'assignee_bug_stats' in filtered_stats:
-                filtered_assignee_stats = []
-                for stats in filtered_stats['assignee_bug_stats']:
-                    # First try exact match with the key
-                    key = stats.get('key', '')
-                    if key and key == participant:
-                        filtered_assignee_stats.append(stats)
-                        continue
-                        
-                    # Try matching with composite_id if available
-                    composite_id = stats.get('composite_id', '')
-                    if composite_id and composite_id == participant:
-                        filtered_assignee_stats.append(stats)
-                        continue
-                    
-                    # Fallback to name comparison
-                    name = stats.get('name', '')
-                    if name and name.lower() == participant_name.lower():
-                        filtered_assignee_stats.append(stats)
-                        
-                filtered_stats['assignee_bug_stats'] = filtered_assignee_stats
-            
-            # Filter reopeners to only the specified participant
-            if 'reopeners' in filtered_stats:
-                filtered_reopeners = []
-                for reopener in filtered_stats['reopeners']:
-                    reopener_name = reopener[0] if isinstance(reopener, list) and len(reopener) > 0 else ''
-                    reopener_key = reopener[2] if isinstance(reopener, list) and len(reopener) > 2 else ''
-                    
-                    # Try matching by key first
-                    if reopener_key and reopener_key == participant:
-                        filtered_reopeners.append(reopener)
-                    # Fallback to name comparison
-                    elif reopener_name and reopener_name.lower() == participant_name.lower():
-                        filtered_reopeners.append(reopener)
-                        
-                filtered_stats['reopeners'] = filtered_reopeners
-            
-            return filtered_stats
-        except Exception as e:
-            logger.error(f"Error filtering cached statistics by participant: {str(e)}")
-            return base_stats
-    
-    def _filter_statistics_by_participant(self, statistics, participant):
-        """
-        Filter statistics by participant
-        
-        Args:
-            statistics: The statistics to filter
-            participant: The participant identifier to filter by (can be a composite key)
-        """
-        logger.info(f"Filtering statistics for participant: {participant}")
-        try:
-            # Create a copy of the statistics to avoid modifying the original
-            filtered_stats = statistics.copy()
-            
-            # Extract participant name from composite key if needed
-            participant_name = participant
-            if '|' in participant:
-                # The participant is a composite key, extract components
-                parts = participant.split('|')
-                # The name might be in different positions depending on the key format
-                # Try to find a non-empty part that's likely the name
-                for part in parts:
-                    if part and not part.startswith('http'):
-                        participant_name = part
-                        break
-            
-            # Filter recent issues to only those assigned to the participant
-            if 'recent_issues' in filtered_stats:
-                filtered_recent_issues = []
-                for issue in filtered_stats['recent_issues']:
-                    # Check if the issue is assigned to the participant
-                    # First try exact match with composite key if available
-                    assignee_key = issue.get('assignee_key', '')
-                    assignee = issue.get('assignee', '')
-                    
-                    if assignee_key and assignee_key == participant:
-                        filtered_recent_issues.append(issue)
-                    # Fallback to name comparison if keys don't match
-                    elif assignee and assignee.lower() == participant_name.lower():
-                        filtered_recent_issues.append(issue)
-                filtered_stats['recent_issues'] = filtered_recent_issues
-            
-            # Filter assignee bug stats to only the specified participant
-            if 'assignee_bug_stats' in filtered_stats:
-                filtered_assignee_stats = []
-                for stats in filtered_stats['assignee_bug_stats']:
-                    # First try exact match with the key
-                    key = stats.get('key', '')
-                    if key and key == participant:
-                        filtered_assignee_stats.append(stats)
-                        continue
-                        
-                    # Try matching with composite_id if available
-                    composite_id = stats.get('composite_id', '')
-                    if composite_id and composite_id == participant:
-                        filtered_assignee_stats.append(stats)
-                        continue
-                    
-                    # Fallback to name comparison
-                    name = stats.get('name', '')
-                    if name and name.lower() == participant_name.lower():
-                        filtered_assignee_stats.append(stats)
-                        
-                filtered_stats['assignee_bug_stats'] = filtered_assignee_stats
-            
-            # Filter reopeners to only the specified participant
-            if 'reopeners' in filtered_stats:
-                filtered_reopeners = []
-                for reopener in filtered_stats['reopeners']:
-                    reopener_name = reopener[0] if isinstance(reopener, list) and len(reopener) > 0 else ''
-                    reopener_key = reopener[2] if isinstance(reopener, list) and len(reopener) > 2 else ''
-                    
-                    # Try matching by key first
-                    if reopener_key and reopener_key == participant:
-                        filtered_reopeners.append(reopener)
-                    # Fallback to name comparison
-                    elif reopener_name and reopener_name.lower() == participant_name.lower():
-                        filtered_reopeners.append(reopener)
-                        
-                filtered_stats['reopeners'] = filtered_reopeners
-            
-            return filtered_stats
-        except Exception as e:
-            logger.error(f"Error filtering statistics by participant: {str(e)}")
-            return statistics
-    
     def find_reopened_bugs(self, project_keys):
         """
         Find bugs that have been reopened across multiple projects

@@ -1520,6 +1520,9 @@ def get_multi_group_statistics():
     reopeners_map = {}
     assignee_bug_stats_map = {}
     recent_issues = []
+    
+    # Store all participants for filtering later
+    all_participants = []
 
     # Function to process a single project in a thread
     def process_project(project_key):
@@ -1634,54 +1637,166 @@ def get_multi_group_statistics():
                         if isinstance(assignee_stats_list, list):
                             for assignee_item in assignee_stats_list:
                                 if isinstance(assignee_item, list) and len(assignee_item) == 2:
-                                    assignee, stats = assignee_item
-                                    if assignee in assignee_bug_stats_map:
-                                        assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
-                                        assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
+                                    assignee_name, stats = assignee_item
+                                    
+                                    # Create a composite key using multiple identifiers
+                                    assignee_data = stats.get('assignee_data', {})
+                                    account_id = assignee_data.get('accountId', '')
+                                    user_key = assignee_data.get('key', '')
+                                    email = assignee_data.get('emailAddress', '')
+                                    avatar_url = ''
+                                    if 'avatarUrls' in assignee_data and assignee_data['avatarUrls']:
+                                        avatar_url = next(iter(assignee_data['avatarUrls'].values()), '')
+                                    
+                                    # Create a composite identifier
+                                    composite_id = f"{account_id}|{user_key}|{email}|{avatar_url}"
+                                    
+                                    # If we couldn't create a good composite ID, use name + avatar as fallback
+                                    if not composite_id.replace("|", ""):
+                                        composite_id = f"{assignee_name}|{avatar_url}"
+                                        
+                                    # If we still don't have a good ID, use just the name
+                                    if not composite_id.replace("|", ""):
+                                        composite_id = assignee_name
+                                    
+                                    if composite_id in assignee_bug_stats_map:
+                                        assignee_bug_stats_map[composite_id]["total"] += stats.get("total", 0)
+                                        assignee_bug_stats_map[composite_id]["reopened"] += stats.get("reopened", 0)
+                                        # Ensure we keep the assignee name for display
+                                        assignee_bug_stats_map[composite_id]["name"] = assignee_name
+                                        # Merge assignee data if available
+                                        if 'assignee_data' in stats:
+                                            assignee_bug_stats_map[composite_id]["assignee_data"] = stats['assignee_data']
                                     else:
-                                        assignee_bug_stats_map[assignee] = {
+                                        assignee_bug_stats_map[composite_id] = {
+                                            "name": assignee_name,
                                             "total": stats.get("total", 0),
-                                            "reopened": stats.get("reopened", 0)
+                                            "reopened": stats.get("reopened", 0),
+                                            "composite_id": composite_id
                                         }
-                                elif isinstance(assignee_item,
-                                                dict) and 'name' in assignee_item and 'stats' in assignee_item:
-                                    assignee = assignee_item['name']
+                                        # Add assignee data if available
+                                        if 'assignee_data' in stats:
+                                            assignee_bug_stats_map[composite_id]["assignee_data"] = stats['assignee_data']
+                                elif isinstance(assignee_item, dict) and 'name' in assignee_item and 'stats' in assignee_item:
+                                    assignee_name = assignee_item['name']
                                     stats = assignee_item['stats']
-                                    if assignee in assignee_bug_stats_map:
-                                        assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
-                                        assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
+                                    
+                                    # Create a composite key using multiple identifiers
+                                    assignee_data = stats.get('assignee_data', {})
+                                    account_id = assignee_data.get('accountId', '')
+                                    user_key = assignee_data.get('key', '')
+                                    email = assignee_data.get('emailAddress', '')
+                                    avatar_url = ''
+                                    if 'avatarUrls' in assignee_data and assignee_data['avatarUrls']:
+                                        avatar_url = next(iter(assignee_data['avatarUrls'].values()), '')
+                                    
+                                    # Create a composite identifier
+                                    composite_id = f"{account_id}|{user_key}|{email}|{avatar_url}"
+                                    
+                                    # If we couldn't create a good composite ID, use name + avatar as fallback
+                                    if not composite_id.replace("|", ""):
+                                        composite_id = f"{assignee_name}|{avatar_url}"
+                                        
+                                    # If we still don't have a good ID, use just the name
+                                    if not composite_id.replace("|", ""):
+                                        composite_id = assignee_name
+                                    
+                                    if composite_id in assignee_bug_stats_map:
+                                        assignee_bug_stats_map[composite_id]["total"] += stats.get("total", 0)
+                                        assignee_bug_stats_map[composite_id]["reopened"] += stats.get("reopened", 0)
+                                        # Ensure we keep the assignee name for display
+                                        assignee_bug_stats_map[composite_id]["name"] = assignee_name
+                                        # Merge assignee data if available
+                                        if 'assignee_data' in stats:
+                                            assignee_bug_stats_map[composite_id]["assignee_data"] = stats['assignee_data']
                                     else:
-                                        assignee_bug_stats_map[assignee] = {
+                                        assignee_bug_stats_map[composite_id] = {
+                                            "name": assignee_name,
                                             "total": stats.get("total", 0),
-                                            "reopened": stats.get("reopened", 0)
+                                            "reopened": stats.get("reopened", 0),
+                                            "composite_id": composite_id
                                         }
+                                        # Add assignee data if available
+                                        if 'assignee_data' in stats:
+                                            assignee_bug_stats_map[composite_id]["assignee_data"] = stats['assignee_data']
                         elif isinstance(assignee_stats_list, dict):
-                            for assignee, stats in assignee_stats_list.items():
-                                if assignee in assignee_bug_stats_map:
-                                    assignee_bug_stats_map[assignee]["total"] += stats.get("total", 0)
-                                    assignee_bug_stats_map[assignee]["reopened"] += stats.get("reopened", 0)
+                            for assignee_name, stats in assignee_stats_list.items():
+                                # Create a composite key using multiple identifiers
+                                assignee_data = stats.get('assignee_data', {})
+                                account_id = assignee_data.get('accountId', '')
+                                user_key = assignee_data.get('key', '')
+                                email = assignee_data.get('emailAddress', '')
+                                avatar_url = ''
+                                if 'avatarUrls' in assignee_data and assignee_data['avatarUrls']:
+                                    avatar_url = next(iter(assignee_data['avatarUrls'].values()), '')
+                                
+                                # Create a composite identifier
+                                composite_id = f"{account_id}|{user_key}|{email}|{avatar_url}"
+                                
+                                # If we couldn't create a good composite ID, use name + avatar as fallback
+                                if not composite_id.replace("|", ""):
+                                    composite_id = f"{assignee_name}|{avatar_url}"
+                                    
+                                # If we still don't have a good ID, use just the name
+                                if not composite_id.replace("|", ""):
+                                    composite_id = assignee_name
+                                
+                                if composite_id in assignee_bug_stats_map:
+                                    assignee_bug_stats_map[composite_id]["total"] += stats.get("total", 0)
+                                    assignee_bug_stats_map[composite_id]["reopened"] += stats.get("reopened", 0)
+                                    # Ensure we keep the assignee name for display
+                                    assignee_bug_stats_map[composite_id]["name"] = assignee_name
+                                    # Merge assignee data if available
+                                    if 'assignee_data' in stats:
+                                        assignee_bug_stats_map[composite_id]["assignee_data"] = stats['assignee_data']
                                 else:
-                                    assignee_bug_stats_map[assignee] = {
+                                    assignee_bug_stats_map[composite_id] = {
+                                        "name": assignee_name,
                                         "total": stats.get("total", 0),
-                                        "reopened": stats.get("reopened", 0)
+                                        "reopened": stats.get("reopened", 0),
+                                        "composite_id": composite_id
                                     }
+                                    # Add assignee data if available
+                                    if 'assignee_data' in stats:
+                                        assignee_bug_stats_map[composite_id]["assignee_data"] = stats['assignee_data']
 
                 # Aggregate participants data with lock
                 with participants_lock:
                     for participant in project_result["participants"]:
-                        participant_key = participant.get("key")
-                        if not participant_key:
+                        # Create a composite key using multiple identifiers
+                        # This ensures users with the same name but different avatars are treated as different users
+                        name = participant.get("name", "")
+                        email = participant.get("email", "")
+                        avatar_url = participant.get("avatarUrl", "")
+                        account_id = participant.get("accountId", "")
+                        user_key = participant.get("key", "")
+                        
+                        # Create a composite identifier that includes multiple attributes
+                        # This helps distinguish users even if they have the same name
+                        composite_id = f"{account_id}|{user_key}|{email}|{avatar_url}"
+                        
+                        # If we couldn't create a good composite ID, use name + avatar as fallback
+                        if not composite_id.replace("|", ""):
+                            composite_id = f"{name}|{avatar_url}"
+                            
+                        # If we still don't have a good ID, skip this participant
+                        if not composite_id.replace("|", ""):
                             continue
 
-                        if participant_key in participants_map:
+                        if composite_id in participants_map:
                             # Update counts
-                            participants_map[participant_key]["assignedCount"] += participant.get("assignedCount", 0)
-                            participants_map[participant_key]["reportedCount"] += participant.get("reportedCount", 0)
-                            participants_map[participant_key]["commentCount"] += participant.get("commentCount", 0)
-                            participants_map[participant_key]["issueCount"] += participant.get("issueCount", 0)
+                            participants_map[composite_id]["assignedCount"] += participant.get("assignedCount", 0)
+                            participants_map[composite_id]["reportedCount"] += participant.get("reportedCount", 0)
+                            participants_map[composite_id]["commentCount"] += participant.get("commentCount", 0)
+                            participants_map[composite_id]["issueCount"] += participant.get("issueCount", 0)
                         else:
                             # Add new participant
-                            participants_map[participant_key] = participant.copy()
+                            participant_copy = participant.copy()
+                            participant_copy["composite_id"] = composite_id  # Store the composite ID for reference
+                            participants_map[composite_id] = participant_copy
+                            
+                            # Add to all participants list for filtering
+                            all_participants.append(participant_copy)
 
                 # Collect recent issues with lock
                 with recent_issues_lock:
@@ -1705,18 +1820,48 @@ def get_multi_group_statistics():
         aggregated_stats["reopeners"] = []
 
     try:
+        # Format assignee bug stats to include avatar URLs and other identifying information
+        formatted_assignee_stats = []
+        for composite_id, stats in assignee_bug_stats_map.items():
+            # Get the assignee data if available
+            assignee_data = stats.get('assignee_data', {})
+            display_name = stats.get('name', '')
+            
+            # Get avatar URL if available
+            avatar_url = ''
+            if 'avatarUrls' in assignee_data and assignee_data['avatarUrls']:
+                avatar_url = next(iter(assignee_data['avatarUrls'].values()), '')
+            
+            # Create a formatted entry with all the identifying information
+            formatted_stats = {
+                "total": stats.get("total", 0),
+                "reopened": stats.get("reopened", 0),
+                "name": display_name,
+                "avatarUrl": avatar_url,
+                "email": assignee_data.get('emailAddress', ''),
+                "accountId": assignee_data.get('accountId', ''),
+                "key": assignee_data.get('key', ''),
+                "composite_id": composite_id
+            }
+            
+            formatted_assignee_stats.append([display_name, formatted_stats])
+        
+        # Sort by total bugs (most first)
         aggregated_stats["assignee_bug_stats"] = sorted(
-            [[name, stats] for name, stats in assignee_bug_stats_map.items()],
+            formatted_assignee_stats,
             key=lambda x: x[1]["total"],
             reverse=True
         )
     except Exception as e:
-        logger.error(f"Error sorting assignee bug stats: {str(e)}")
+        logger.error(f"Error formatting and sorting assignee bug stats: {str(e)}")
         aggregated_stats["assignee_bug_stats"] = []
     
     # Convert maps to final format for response
     aggregated_stats["participants"] = list(participants_map.values())
     aggregated_stats["total_participants"] = len(aggregated_stats["participants"])
+    
+    # Add all participants list for filtering
+    aggregated_stats["all_participants"] = sorted(all_participants, key=lambda x: x.get("name", ""))
 
     # Sort recent issues by updated date and take the most recent 20
     try:
